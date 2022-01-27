@@ -9,7 +9,7 @@ import copy
 
 keyword_regex = r'(?:(' + ('|'.join(KEYWORD_NAMES.keys())) + r')(?=\s|$|;))'
 builtins_regex = r'(' + ('|'.join(BUILTINS_NAMES.keys())) + r')'
-lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|(-?[0-9]+)|(ptr|<<|>>|[<>!=\\.]=|[\+\-\*\/\;\(\)\%\>\<\=\$\,\&\|\^])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
+lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|(-?[0-9]+)|(<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
 # print(lang_regex)
 regex_type_map = [
     TokenType.KEYWORD,
@@ -95,12 +95,6 @@ def tokenize_string(filepath:str, input_string: str):
                             typ = TokenType.LT
                         case '==':
                             typ = TokenType.EQ
-                        case '.=':
-                            typ = TokenType.ASSIGN_PTR
-                        case 'ptr':
-                            typ = TokenType.PTR
-                        case '$':
-                            typ = TokenType.DEREF
                         case ',':
                             typ = TokenType.COMMA
                         case '<<':
@@ -150,11 +144,6 @@ def parse_tokens(tokens: List[Token]):
     ast = []
 
     declared_vars: Set[str] = set()
-    declared_macros: Dict[str, Tuple[List[str], List[ASTNode_Base], List[ASTNode_Base]]] = {}
-    defining_macro = False
-    defining_macro_args = []
-    defining_macro_body = []
-    deferred_macro_refs = []
 
     declared_funs: Dict[str, ASTNode_Base] = {}
     defining_function = False
@@ -192,12 +181,8 @@ def parse_tokens(tokens: List[Token]):
 
     def parse_var_decl():
         var_tok = expect_keyword(Keyword.VAR)
-        if defining_macro:
-            compiler_error(var_tok.loc, "Cannot define a variable inside a macro")
         ident_tok = expect_token(TokenType.IDENTIFIER)
         assert isinstance(ident_tok.value, str), "Expected string identifier value"
-        if ident_tok.value in declared_macros:
-            compiler_error(ident_tok.loc, f"Cannot override macro with same name {ident_tok.value}")
         if ident_tok.value in declared_vars:
             compiler_error(ident_tok.loc, f"Redeclaration of existing variable {ident_tok.value}")
         declared_vars.add(ident_tok.value)
@@ -307,8 +292,6 @@ def parse_tokens(tokens: List[Token]):
 
     def parse_buffer_alloc():
         tok = expect_keyword(Keyword.BUFFER)
-        if defining_macro:
-            compiler_error(tok.loc, "Cannot allocate buffer space within a macro")
         expect_token(TokenType.OPEN_PAREN)
         exp = parse_expression()
         expect_token(TokenType.CLOSE_PAREN)
@@ -412,42 +395,10 @@ def parse_tokens(tokens: List[Token]):
         [Operator.SHIFT_LEFT, Operator.SHIFT_RIGHT],
         [Operator.PLUS, Operator.MINUS],
         [Operator.MULTIPLY, Operator.DIVIDE, Operator.MODULUS],
-        [Operator.ASSIGN, Operator.ASSIGN_PTR],
+        [Operator.ASSIGN],
     ]
 
-    unary_ops = [Operator.GET_PTR, Operator.DEREF]
-
-    def expand_macro(macro_name: str):
-        assert macro_name in declared_macros, "Macro being expanded is not defined"
-        macro_arg_names, macro_body, macro_deferred_refs = declared_macros[macro_name]
-        expect_token(TokenType.OPEN_PAREN)
-        args = {}
-        macro_num_args = len(macro_arg_names)
-        for i,arg_name in enumerate(macro_arg_names):
-            args[arg_name] = parse_expression()
-            if i < macro_num_args - 1:
-                expect_token(TokenType.COMMA)
-            
-        expect_token(TokenType.CLOSE_PAREN)
-
-        def copy_macro_ast(a: ASTNode_Base):
-            if a in macro_deferred_refs:
-                return args[a.value.value]
-            new_a = copy.copy(a)
-            for k,v in new_a.__dict__.items():
-                if isinstance(v, ASTNode_Base):
-                    new_a.__dict__[k] = copy_macro_ast(v)
-                elif isinstance(v, list):
-                    assert all([isinstance(lv, ASTNode_Base) for lv in v]), "Expected all items in block to be ASTNodes"
-                    new_a.__dict__[k] = [copy_macro_ast(lv) for lv in v]
-            return new_a
-
-        for a in macro_body:
-            a_copy = copy_macro_ast(a)
-            if defining_macro:
-                defining_macro_body.append(a_copy)
-            else:
-                ast.append(a_copy)
+    unary_ops = [Operator.MINUS]
 
     def parse_base():
         tok = tokens[index]
@@ -471,13 +422,7 @@ def parse_tokens(tokens: List[Token]):
                 return ASTNode_Number(ASTType.NUMBER, value=t, num_value=ord(t.value))
             case TokenType.IDENTIFIER:
                 t = expect_token(TokenType.IDENTIFIER)
-                if t.value in declared_macros:
-                    compiler_error(tok.loc, "Macros do not have a return value, and cannot be used as a value")
-                elif defining_macro and t.value in defining_macro_args:
-                    r = ASTNode_Single(ASTType.NONE, value=t, ast_ref=None)
-                    deferred_macro_refs.append(r)
-                    return r
-                elif t.value in declared_vars:
+                if t.value in declared_vars:
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
                 elif defining_function and t.value in defining_function_args:
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
@@ -511,9 +456,6 @@ def parse_tokens(tokens: List[Token]):
         if tok.typ == TokenType.ASSIGN:
             expect_token(TokenType.ASSIGN)
             return ASTNode_Assign(ASTType.ASSIGN, value=tok, l_ast=l_exp, r_ast=parse_expression())
-        elif tok.typ == TokenType.ASSIGN_PTR:
-            expect_token(TokenType.ASSIGN_PTR)
-            return ASTNode_Assign(ASTType.ASSIGN_PTR, value=tok, l_ast=l_exp, r_ast=parse_expression())
         else:
             return l_exp
 
@@ -522,10 +464,6 @@ def parse_tokens(tokens: List[Token]):
         if tok.typ in TOKEN_OP_MAP and TOKEN_OP_MAP[tok.typ] in unary_ops:
             op_tok = expect_token(tok.typ)
             exp: ASTNode_Base = parse_unary()
-
-            if TOKEN_OP_MAP[tok.typ] == Operator.GET_PTR or TOKEN_OP_MAP[tok.typ] == Operator.DEREF:
-                if exp.typ != ASTType.VAR_REF:
-                    compiler_error(exp.value.loc, f"The 'ptr' operator can only be used on variables")
 
             return ASTNode_Single(ASTType.UNARY_OP, op_tok, exp)
         else:
@@ -548,54 +486,11 @@ def parse_tokens(tokens: List[Token]):
             break
         return l_exp
 
-    def parse_macro():
-        nonlocal index, defining_macro, defining_macro_args, deferred_macro_refs, defining_macro_body
-        tok = expect_keyword(Keyword.MACRO)
-        if defining_macro:
-            compiler_error(tok.loc, "Cannot define a macro within a macro")
-        mac_nam_tok = expect_token(TokenType.IDENTIFIER)
-        if mac_nam_tok.value in declared_macros:
-            compiler_error(tok.loc, f"Redefinition of existing macro {mac_nam_tok.value}")
-        elif mac_nam_tok.value in declared_vars:
-            compiler_error(tok.loc, f"Cannot override variable with same name {mac_nam_tok.value}")
-        arg_idents: List[str] = []
-        while True:
-            tok = tokens[index]
-            if (tok.typ == TokenType.KEYWORD and tok.value == Keyword.IN):
-                break
-            elif tok.typ == TokenType.IDENTIFIER:
-                expect_token(TokenType.IDENTIFIER)
-                arg_idents.append(tok.value)
-            else:
-                compiler_error(tok.loc, f"Unexpected token {tok.typ.name}")
-        expect_keyword(Keyword.IN)
-        defining_macro_body = []
-        defining_macro = True
-        defining_macro_args = arg_idents
-        while index < len(tokens):
-            if tokens[index].typ == TokenType.EOF or (tokens[index].typ == TokenType.KEYWORD and tokens[index].value == Keyword.END):
-                break
-            if tokens[index].typ == TokenType.EOL:
-                index += 1
-                continue
-            s = parse_statement()
-            if s and s.typ != ASTType.NONE:
-                defining_macro_body.append(s)
-        expect_keyword(Keyword.END)
-
-        declared_macros[mac_nam_tok.value] = (arg_idents, list(defining_macro_body), list(deferred_macro_refs))
-        
-        defining_macro = False
-        defining_macro_args = []
-        deferred_macro_refs = []
-        defining_macro_body = []
-
     def parse_include():
         tok = expect_keyword(Keyword.INCLUDE)
         file_tok = expect_token(TokenType.STRING)
-        inc_a, inc_mac, inc_vars, inc_funs = file_to_ast(file_tok.value)
+        inc_a, inc_vars, inc_funs = file_to_ast(file_tok.value)
         ast.extend(inc_a)
-        declared_macros.update(inc_mac)
         declared_vars.update(inc_vars)
         declared_funs.update(inc_funs)
 
@@ -621,8 +516,6 @@ def parse_tokens(tokens: List[Token]):
                         return_ast = parse_store()
                     case Keyword.LOAD8 | Keyword.LOAD64:
                         return_ast = parse_load()
-                    case Keyword.MACRO:
-                        parse_macro()
                     case Keyword.INCLUDE:
                         parse_include()
                     case Keyword.CONST:
@@ -636,11 +529,7 @@ def parse_tokens(tokens: List[Token]):
                     case _:
                         compiler_error(tok.loc, f"Unexpected keyword {tok.value.name}")
             case _:
-                if tok.typ == TokenType.IDENTIFIER and tok.value in declared_macros:
-                    expect_token(TokenType.IDENTIFIER)
-                    expand_macro(tok.value)
-                else:
-                    return_ast = parse_expression()
+                return_ast = parse_expression()
         
         if tokens[index].typ in [TokenType.SEMICOLON, TokenType.EOL, TokenType.EOF]:
             # Consume some end of statement token
@@ -660,7 +549,7 @@ def parse_tokens(tokens: List[Token]):
         if s and s.typ != ASTType.NONE:
             ast.append(s)
     
-    return ast, declared_macros, declared_vars, declared_funs
+    return ast, declared_vars, declared_funs
 
 def print_ast(ast:ASTNode_Base, indent=0):
     indent_str = ' | ' * indent
@@ -687,10 +576,6 @@ def print_ast(ast:ASTNode_Base, indent=0):
             assert isinstance(ast, ASTNode_Single), "Expected Single Ref AST"
             print_ast(ast.ast_ref, indent + 1)
         case ASTType.ASSIGN:
-            assert isinstance(ast, ASTNode_Assign), "Expected Assign AST"
-            print_ast(ast.l_ast, indent + 1)
-            print_ast(ast.r_ast, indent + 1)
-        case ASTType.ASSIGN_PTR:
             assert isinstance(ast, ASTNode_Assign), "Expected Assign AST"
             print_ast(ast.l_ast, indent + 1)
             print_ast(ast.r_ast, indent + 1)
@@ -738,128 +623,6 @@ def print_ast(ast:ASTNode_Base, indent=0):
             pass
         case _:
             assert False, f"Unhandled AST Type {ast.typ}"
-
-@dataclass
-class VarPtr:
-    var_pointed:str
-
-class EvaluationContext:
-
-    def __init__(self) -> None:
-        self.variable_values = {}
-
-    def declare_variable(self, name:str):
-        self.variable_values[name] = 0
-
-    def get_variable(self, name:str):
-        return self.variable_values[name]
-    
-    def update_variable(self, name:str, value:int):
-        self.variable_values[name] = value
-
-    def create_subctx(self):
-        # ctx = EvaluationContext()
-        # ctx.variable_values.update(self.variable_values)
-        # return ctx
-        return self
-
-def evaluate_ast(ast:ASTNode_Base, eval_ctx:EvaluationContext):
-    match ast.typ:
-        case ASTType.NUMBER:
-            assert isinstance(ast, ASTNode_Number), "Expected Number AST"
-            return ast.num_value
-        case ASTType.BINARY_OP:
-            assert isinstance(ast, ASTNode_BinaryOp), "Expected Binary Op AST"
-            l_eval = evaluate_ast(ast.l_ast, eval_ctx)
-            r_eval = evaluate_ast(ast.r_ast, eval_ctx)
-            assert ast.value.typ in TOKEN_OP_MAP, "Binary Operator token should be an Operator"
-            assert isinstance(l_eval, int) and isinstance(r_eval, int), "Binary operands must be integers"
-            op = TOKEN_OP_MAP[ast.value.typ]
-            match op:
-                case Operator.PLUS:
-                    return l_eval + r_eval
-                case Operator.MINUS:
-                    return l_eval - r_eval
-                case Operator.MULTIPLY:
-                    return l_eval * r_eval
-                case Operator.DIVIDE:
-                    return l_eval // r_eval
-                case Operator.MODULUS:
-                    return l_eval % r_eval
-                case Operator.GT:
-                    return 1 if l_eval > r_eval else 0
-                case Operator.LT:
-                    return 1 if l_eval < r_eval else 0
-                case Operator.LE:
-                    return 1 if l_eval <= r_eval else 0
-                case Operator.GE:
-                    return 1 if l_eval >= r_eval else 0
-                case Operator.NE:
-                    return 1 if l_eval != r_eval else 0
-                case Operator.EQ:
-                    return 1 if l_eval == r_eval else 0
-                case _:
-                    assert False, f"Unknown operator {op.name}"
-        case ASTType.UNARY_OP:
-            assert isinstance(ast, ASTNode_Single), "Expected Signle Ref AST"
-            assert ast.value.typ in TOKEN_OP_MAP, "Binary Operator token should be an Operator"
-            op = TOKEN_OP_MAP[ast.value.typ]
-            if op == Operator.GET_PTR:
-                v_ref = ast.ast_ref
-                assert v_ref.typ == ASTType.VAR_REF, "GET PTR must operate on a variable"
-                return VarPtr(v_ref.ident_str)
-            v_eval = evaluate_ast(ast.ast_ref, eval_ctx)
-            match op:
-                case Operator.DEREF:
-                    assert isinstance(v_eval, VarPtr), "Can only deref pointers"
-                    return eval_ctx.get_variable(v_eval.var_pointed)
-                case _:
-                    assert False, f"Unknown Operator {op.name}"
-        case ASTType.PRINT:
-            assert isinstance(ast, ASTNode_Single), "Expected Single Ref AST"
-            v_eval = evaluate_ast(ast.ast_ref, eval_ctx)
-            print(v_eval)
-        case ASTType.VAR_DECL:
-            eval_ctx.declare_variable(ast.ident_str)
-        case ASTType.VAR_REF:
-            return eval_ctx.get_variable(ast.ident_str)
-        case ASTType.ASSIGN:
-            assert isinstance(ast, ASTNode_Assign), "Expected Assign AST"
-            v_eval = evaluate_ast(ast.r_ast, eval_ctx)
-            var_ast = ast.l_ast
-            assert var_ast.typ == ASTType.VAR_REF
-            var_name = var_ast.ident_str
-            var_val = eval_ctx.get_variable(var_name)
-            eval_ctx.update_variable(var_name, v_eval)
-            return v_eval
-        case ASTType.ASSIGN_PTR:
-            assert isinstance(ast, ASTNode_Assign), "Expected Assign AST"
-            v_eval = evaluate_ast(ast.r_ast, eval_ctx)
-            var_ast = ast.l_ast
-            assert var_ast.typ == ASTType.VAR_REF
-            var_name = var_ast.ident_str
-            var_val = eval_ctx.get_variable(var_name)
-            assert isinstance(var_val, VarPtr), "'.=' can only operate on pointers"
-            eval_ctx.update_variable(var_val.var_pointed, v_eval)
-            return v_eval
-        case ASTType.IF:
-            assert isinstance(ast, ASTNode_If), "Expected If AST"
-            cond_val = evaluate_ast(ast.cond_ast, eval_ctx)
-            if cond_val != 0:
-                subctx = eval_ctx.create_subctx()
-                for a in ast.then_ast_block:
-                    evaluate_ast(a, subctx)
-            else:
-                if ast.else_if_ast is not None:
-                    evaluate_ast(ast.else_if_ast, eval_ctx)
-                elif ast.else_ast_block is not None:
-                    subctx = eval_ctx.create_subctx()
-                    for a in ast.else_ast_block:
-                        evaluate_ast(a, subctx)
-        case ASTType.SYSCALL:
-            pass
-        case _:
-            assert False, f"AST Type {ast.typ.name} not implemented"
 
 def file_to_ast(filename: str):
     with open(filename, 'r') as f:

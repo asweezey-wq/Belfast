@@ -1,5 +1,4 @@
 from enum import Enum, auto
-from types import NoneType
 from typing import *
 from dataclasses import dataclass
 import sys
@@ -20,8 +19,6 @@ class Keyword(Enum):
     WHILE = auto()
     DO = auto()
     BUFFER = auto()
-    IN = auto()
-    MACRO = auto()
     INCLUDE = auto()
     CONST = auto()
     FUN = auto()
@@ -37,7 +34,6 @@ class Keyword(Enum):
 
 class Operator(Enum):
     ASSIGN = auto()
-    ASSIGN_PTR = auto()
     PLUS = auto()
     MINUS = auto()
     MULTIPLY = auto()
@@ -49,8 +45,6 @@ class Operator(Enum):
     GT = auto()
     LE = auto()
     LT = auto()
-    GET_PTR = auto()
-    DEREF = auto()
     SHIFT_RIGHT = auto()
     SHIFT_LEFT = auto()
     BITWISE_AND = auto()
@@ -68,8 +62,6 @@ KEYWORD_NAMES = {
     'elif': Keyword.ELIF,
     'while': Keyword.WHILE,
     'do': Keyword.DO,
-    'in': Keyword.IN,
-    'macro': Keyword.MACRO,
     'include': Keyword.INCLUDE,
     'const': Keyword.CONST,
     'return': Keyword.RETURN,
@@ -108,9 +100,6 @@ class TokenType(Enum):
     BITWISE_OR = auto()
     BITWISE_XOR = auto()
 
-    PTR = auto()
-    DEREF = auto()
-
     EQ = auto()
     NE = auto()
     GE = auto()
@@ -119,7 +108,6 @@ class TokenType(Enum):
     LT = auto()
 
     ASSIGN = auto()
-    ASSIGN_PTR = auto()
     OPEN_PAREN = auto()
     CLOSE_PAREN = auto()
     COMMA = auto()
@@ -134,7 +122,6 @@ class ASTType(Enum):
     UNARY_OP = auto()
     BINARY_OP = auto()
     ASSIGN = auto()
-    ASSIGN_PTR = auto()
     PRINT = auto()
     IF = auto()
     WHILE = auto()
@@ -237,9 +224,6 @@ TOKEN_OP_MAP = {
     TokenType.GE: Operator.GE,
     TokenType.LT: Operator.LT,
     TokenType.LE: Operator.LE,
-    TokenType.ASSIGN_PTR: Operator.ASSIGN_PTR,
-    TokenType.PTR: Operator.GET_PTR,
-    TokenType.DEREF: Operator.DEREF,
     TokenType.BITWISE_AND: Operator.BITWISE_AND,
     TokenType.BITWISE_OR: Operator.BITWISE_OR,
     TokenType.BITWISE_XOR: Operator.BITWISE_XOR,
@@ -269,7 +253,6 @@ class TripleType(Enum):
     UNARY_OP = auto()
     PRINT = auto()
     ASSIGN = auto()
-    ASSIGN_PTR = auto()
     IF_COND = auto()
     GOTO = auto()
     LABEL = auto()

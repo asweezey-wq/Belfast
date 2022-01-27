@@ -59,15 +59,7 @@ class TripleContext:
 
 
 def print_triple(t:Triple):
-    flag_str = ""
-    # if t.flags & TF_EPHEMERAL > 0:
-    #     flag_str += "$"
-    # if t.flags & TF_BOOL_FORWARDED > 0:
-    #     flag_str += "%"
-    # if len(flag_str) > 0:
-    #     flag_str += " "
     ind_str = str(t.index)
-    # flag_space = ' ' * (4 - len(flag_str))
     trip_str = f"{t.index}:{' ' * (4 - len(ind_str))}{t.typ.name}"
     if t.typ == TripleType.BINARY_OP or t.typ == TripleType.UNARY_OP or t.typ == TripleType.IF_COND:
         trip_str += f" {t.op.name}"
@@ -120,7 +112,11 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
         case ASTType.UNARY_OP:
             exp_trips, exp_trip_val = ast_to_triples(ast.ast_ref, ctx)
             triples.extend(exp_trips)
-            triples.append(Triple(TripleType.UNARY_OP, op=TOKEN_OP_MAP[ast.value.typ], l_val=exp_trip_val, r_val=None))
+            op = TOKEN_OP_MAP[ast.value.typ]
+            if op == Operator.MINUS:
+                # Unary minus is a negation
+                op = Operator.NEGATE
+            triples.append(Triple(TripleType.UNARY_OP, op=op, l_val=exp_trip_val, r_val=None))
             trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
         case ASTType.PRINT:
             exp_trips, exp_trip_val = ast_to_triples(ast.ast_ref, ctx)
@@ -146,14 +142,6 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             r_trips, r_trip_val = ast_to_triples(ast.r_ast, ctx)
             triples.extend(r_trips)
             triples.append(Triple(TripleType.ASSIGN, op=None, l_val=TripleValue(TripleValueType.VAR_ASSIGN, value=l_trip_val.value), r_val=r_trip_val))
-            trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
-        case ASTType.ASSIGN_PTR:
-            l_trips, l_trip_val = ast_to_triples(ast.l_ast, ctx)
-            assert len(l_trips) == 0, "Multiple triples on Assign LHS not supported"
-            assert l_trip_val.typ == TripleValueType.VAR_REF, "Expected variable ref on LHS of Assign"
-            r_trips, r_trip_val = ast_to_triples(ast.r_ast, ctx)
-            triples.extend(r_trips)
-            triples.append(Triple(TripleType.ASSIGN_PTR, op=None, l_val=TripleValue(TripleValueType.VAR_ASSIGN, value=l_trip_val.value), r_val=r_trip_val))
             trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
         case ASTType.IF:
             cond_trips, cond_val = ast_to_triples(ast.cond_ast, ctx)
@@ -563,22 +551,6 @@ def convert_triple_to_asm(triple:Triple, ctx:ASMContext, trip_ctx:TripleContext,
             used_values.append(v)
             v_loc: TripleLoc = get_triple_loc(v, ctx)
             match triple.op:
-                case Operator.GET_PTR:
-                    assert v.typ == TripleValueType.VAR_REF, "Expected Get PTR operand to be VAR REF"
-                    assert v.value in ctx.var_table, "Variable was not put in var table"
-                    triple.loc = TripleLoc(TripleLocType.MEMORY_ADDR_LABEL, ctx.var_table[v.value].value)
-                case Operator.DEREF:
-                    assert v.typ == TripleValueType.VAR_REF, "Expected DEREF operand to be VAR REF"
-                    if v_loc.typ != TripleLocType.REGISTER:
-                        asm += ctx.put_value_in_free_register(v)
-                        v_loc = get_triple_loc(v, ctx)
-                    assert v_loc.typ == TripleLocType.REGISTER, "Expected variable to be in register"
-                    triple_ref = TripleValue(TripleValueType.TRIPLE_REF, triple)
-                    reg_ind = ctx.get_free_register()
-                    write_asm(f"mov {reg_str_for_size(reg_ind)}, [{get_triple_loc_str(v_loc)}]")
-                    ctx.update_reg_triple(reg_ind, triple)
-                    refloc = get_triple_loc(triple_ref, ctx)
-                    triple.loc = refloc
                 case _:
                     assert False, f"Unhandled Triple Operator {triple.op.name}"
         case TripleType.PRINT:
@@ -607,25 +579,6 @@ def convert_triple_to_asm(triple:Triple, ctx:ASMContext, trip_ctx:TripleContext,
             triple.loc = loc_r
             if loc_r.typ == TripleLocType.REGISTER:
                 ctx.register_value_updated(loc_r.value, TripleValue(TripleValueType.VAR_REF, var_val.value))
-        case TripleType.ASSIGN_PTR:
-            var_val: TripleValue = triple.l_val
-            rhs_val: TripleValue = triple.r_val
-            used_values.append(rhs_val)
-            loc_r: TripleLoc = get_triple_loc(rhs_val, ctx)
-            assert var_val.typ == TripleValueType.VAR_ASSIGN, "Expected Assignment variable on LHS of Assign triple"
-            var_loc: TripleLoc = get_triple_loc(var_val, ctx)
-            var_val = TripleValue(TripleValueType.VAR_REF, var_val.value)
-            if var_loc.typ != TripleLocType.REGISTER:
-                asm += ctx.put_value_in_free_register(var_val)
-                var_loc = get_triple_loc(var_val, ctx)
-            assert var_loc.typ == TripleLocType.REGISTER, "Expected variable to be in register"
-            if loc_r.typ not in [TripleLocType.REGISTER, TripleLocType.CONSTANT]:
-                asm += ctx.put_value_in_free_register(rhs_val)
-                loc_r = get_triple_loc(rhs_val, ctx)
-                assert var_loc.typ == TripleLocType.REGISTER, "Expected assignment value RHS to be in register"
-            write_asm(f"mov qword [{get_triple_loc_str(var_loc)}], {get_triple_loc_str(loc_r)}")
-            triple.loc = loc_r
-            ctx.flush_variable_registers()
         case TripleType.LABEL:
             write_asm(f"_L{triple.index}:")
             ctx.flush_registers(do_save=False)
