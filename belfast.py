@@ -9,7 +9,7 @@ import copy
 
 keyword_regex = r'(?:(' + ('|'.join(KEYWORD_NAMES.keys())) + r')(?=\s|$|;))'
 builtins_regex = r'(' + ('|'.join(BUILTINS_NAMES.keys())) + r')'
-lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|(-?[0-9]+)|(<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^!~])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
+lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|(-?[0-9]+)|(\|\||&&|<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^!~])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
 # print(lang_regex)
 regex_type_map = [
     TokenType.KEYWORD,
@@ -111,6 +111,10 @@ def tokenize_string(filepath:str, input_string: str):
                             typ = TokenType.BITWISE_NOT
                         case '!':
                             typ = TokenType.LOGICAL_NOT
+                        case '||':
+                            typ = TokenType.LOGICAL_OR
+                        case '&&':
+                            typ = TokenType.LOGICAL_AND
                         case _:
                             assert False, f"Unhandled token '{t[6]}'"
                 elif t[8] is not None:
@@ -393,6 +397,7 @@ def parse_tokens(tokens: List[Token]):
         return ASTNode_Funcall(ASTType.FUN_CALL, t, t.value, arg_exp)
 
     op_assoc = [
+        [Operator.LOGICAL_AND, Operator.LOGICAL_OR],
         [Operator.BITWISE_AND, Operator.BITWISE_XOR, Operator.BITWISE_OR],
         [Operator.EQ, Operator.NE],
         [Operator.GE, Operator.GT, Operator.LE, Operator.LT],
@@ -673,7 +678,7 @@ if __name__ == '__main__':
         x86_tripstr += output_x86_trips_to_str(f_trips, trip_ctx)
         x86_tripstr += "\n"
         if not args.ir_only:
-            convert_function_to_asm(f_name, f_trips, trip_ctx, args.no_comments)
+            asm += convert_function_to_asm(f_name, f_trips, trip_ctx, args.no_comments)
         prog_tripstr += "\n"
 
     # with open('print_d.asm') as f:

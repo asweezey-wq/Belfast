@@ -52,7 +52,10 @@ class Operator(Enum):
     BITWISE_XOR = auto()
     BITWISE_NOT = auto()
     NEGATE = auto()
+
     LOGICAL_NOT = auto()
+    LOGICAL_AND = auto()
+    LOGICAL_OR = auto()
 
 KEYWORD_NAMES = {
     'var': Keyword.VAR,
@@ -103,6 +106,8 @@ class TokenType(Enum):
     BITWISE_XOR = auto()
     BITWISE_NOT = auto()
     LOGICAL_NOT = auto()
+    LOGICAL_AND = auto()
+    LOGICAL_OR = auto()
 
     EQ = auto()
     NE = auto()
@@ -232,9 +237,11 @@ TOKEN_OP_MAP = {
     TokenType.BITWISE_OR: Operator.BITWISE_OR,
     TokenType.BITWISE_XOR: Operator.BITWISE_XOR,
     TokenType.BITWISE_NOT: Operator.BITWISE_NOT,
-    TokenType.LOGICAL_NOT: Operator.LOGICAL_NOT,
     TokenType.SHIFT_LEFT: Operator.SHIFT_LEFT,
     TokenType.SHIFT_RIGHT: Operator.SHIFT_RIGHT,
+    TokenType.LOGICAL_NOT: Operator.LOGICAL_NOT,
+    TokenType.LOGICAL_AND: Operator.LOGICAL_AND,
+    TokenType.LOGICAL_OR: Operator.LOGICAL_OR,
 }
 
 KW_SIZE_MAP = {

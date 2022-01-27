@@ -57,7 +57,6 @@ class TripleContext:
                 reg.add(self.register_alloc[v])
         return reg
 
-
 def print_triple(t:Triple):
     ind_str = str(t.index)
     trip_str = f"{t.index}:{' ' * (4 - len(ind_str))}{t.typ.name}"
@@ -105,10 +104,44 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
         case ASTType.BINARY_OP:
             l_trips, l_trip_val = ast_to_triples(ast.l_ast, ctx)
             r_trips, r_trip_val = ast_to_triples(ast.r_ast, ctx)
-            triples.extend(l_trips)
-            triples.extend(r_trips)
-            triples.append(Triple(TripleType.BINARY_OP,op=TOKEN_OP_MAP[ast.value.typ], l_val=l_trip_val, r_val=r_trip_val))
-            trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
+            op = TOKEN_OP_MAP[ast.value.typ]
+            if op == Operator.LOGICAL_AND:
+                var_name = f"_T{len(triples)}_ss"
+                var_assign = TripleValue(TripleValueType.VAR_ASSIGN, var_name)
+                var_ref = TripleValue(TripleValueType.VAR_REF, var_name)
+                short_circuit_label = Triple(TripleType.LABEL, None, None, None)
+                end_label = Triple(TripleType.LABEL, None, None, None)
+                triples.extend(l_trips)
+                triples.append(Triple(TripleType.IF_COND, Operator.NE, l_trip_val, TripleValue(TripleValueType.TRIPLE_TARGET, short_circuit_label)))
+                triples.extend(r_trips)
+                triples.append(Triple(TripleType.BINARY_OP, Operator.NE, r_trip_val, TripleValue(TripleValueType.CONSTANT, 0)))
+                triples.append(Triple(TripleType.ASSIGN, None, var_assign, TripleValue(TripleValueType.TRIPLE_REF, triples[-1])))
+                triples.append(Triple(TripleType.GOTO, None, TripleValue(TripleValueType.TRIPLE_TARGET, end_label), None))
+                triples.append(short_circuit_label)
+                triples.append(Triple(TripleType.ASSIGN, None, var_assign, TripleValue(TripleValueType.CONSTANT, 0)))
+                triples.append(end_label)
+                trip_val = var_ref
+            elif op == Operator.LOGICAL_OR:
+                var_name = f"_T{len(triples)}_ss"
+                var_assign = TripleValue(TripleValueType.VAR_ASSIGN, var_name)
+                var_ref = TripleValue(TripleValueType.VAR_REF, var_name)
+                short_circuit_label = Triple(TripleType.LABEL, None, None, None)
+                end_label = Triple(TripleType.LABEL, None, None, None)
+                triples.extend(l_trips)
+                triples.append(Triple(TripleType.IF_COND, Operator.EQ, l_trip_val, TripleValue(TripleValueType.TRIPLE_TARGET, short_circuit_label)))
+                triples.extend(r_trips)
+                triples.append(Triple(TripleType.BINARY_OP, Operator.NE, r_trip_val, TripleValue(TripleValueType.CONSTANT, 0)))
+                triples.append(Triple(TripleType.ASSIGN, None, var_assign, TripleValue(TripleValueType.TRIPLE_REF, triples[-1])))
+                triples.append(Triple(TripleType.GOTO, None, TripleValue(TripleValueType.TRIPLE_TARGET, end_label), None))
+                triples.append(short_circuit_label)
+                triples.append(Triple(TripleType.ASSIGN, None, var_assign, TripleValue(TripleValueType.CONSTANT, 1)))
+                triples.append(end_label)
+                trip_val = var_ref
+            else:
+                triples.extend(l_trips)
+                triples.extend(r_trips)
+                triples.append(Triple(TripleType.BINARY_OP,op=op, l_val=l_trip_val, r_val=r_trip_val))
+                trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
         case ASTType.UNARY_OP:
             exp_trips, exp_trip_val = ast_to_triples(ast.ast_ref, ctx)
             triples.extend(exp_trips)

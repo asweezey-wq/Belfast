@@ -610,7 +610,12 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     else:
                         assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
                         write_asm(f"cmp {triple_value_str(lv)}, 0")
-                        write_asm(f"je {triple_value_str(rv)}")
+                        if t.op == Operator.NE:
+                            write_asm(f"je {triple_value_str(rv)}")
+                        elif t.op == Operator.EQ:
+                            write_asm(f"jne {triple_value_str(rv)}")
+                        else:
+                            assert False, f"Unimplemented IF_COND operator {t.op.name}"
                 case TripleType.STORE:
                     assert rv.typ in [TripleValueType.REGISTER, TripleValueType.CONSTANT], "Expected STORE RHS to be a constant or register"
                     mem_word = MEM_WORD_SIZE_MAP[t.size]
