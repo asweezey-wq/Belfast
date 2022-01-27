@@ -404,7 +404,7 @@ def parse_tokens(tokens: List[Token]):
         [Operator.SHIFT_LEFT, Operator.SHIFT_RIGHT],
         [Operator.PLUS, Operator.MINUS],
         [Operator.MULTIPLY, Operator.DIVIDE, Operator.MODULUS],
-        [Operator.ASSIGN],
+        # [Operator.ASSIGN],
     ]
 
     unary_ops = [Operator.MINUS, Operator.LOGICAL_NOT, Operator.BITWISE_NOT]
@@ -460,13 +460,12 @@ def parse_tokens(tokens: List[Token]):
         return parse_base()
 
     def parse_assign():
-        l_exp = parse_kw()
+        l_exp = parse_base()
+        assert l_exp.typ == ASTType.VAR_REF, "Assign expected var on LHS"
         tok = tokens[index]
-        if tok.typ == TokenType.ASSIGN:
-            expect_token(TokenType.ASSIGN)
-            return ASTNode_Assign(ASTType.ASSIGN, value=tok, l_ast=l_exp, r_ast=parse_expression())
-        else:
-            return l_exp
+        assert tok.typ == TokenType.ASSIGN, "Assign expected '=' after variable"
+        expect_token(TokenType.ASSIGN)
+        return ASTNode_Assign(ASTType.ASSIGN, value=tok, l_ast=l_exp, r_ast=parse_expression())
 
     def parse_unary():
         tok = tokens[index]
@@ -476,7 +475,7 @@ def parse_tokens(tokens: List[Token]):
 
             return ASTNode_Single(ASTType.UNARY_OP, op_tok, exp)
         else:
-            return parse_assign()
+            return parse_kw()
 
 
     def parse_expression(level=0):
@@ -538,7 +537,10 @@ def parse_tokens(tokens: List[Token]):
                     case _:
                         compiler_error(tok.loc, f"Unexpected keyword {tok.value.name}")
             case _:
-                return_ast = parse_expression()
+                if tok.typ == TokenType.IDENTIFIER and tokens[index + 1].typ == TokenType.ASSIGN:
+                    return_ast = parse_assign()
+                else:
+                    return_ast = parse_expression()
         
         if tokens[index].typ in [TokenType.SEMICOLON, TokenType.EOL, TokenType.EOF]:
             # Consume some end of statement token
