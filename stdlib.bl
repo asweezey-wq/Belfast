@@ -20,3 +20,28 @@ fun putd d do
 
     syscall(0x2000004, 1, putd_buf + (32 - putd_cnt), putd_cnt+1)
 end
+
+fun puth h do
+    var buf = buffer(32)
+    var hex = "0123456789ABCDEF"
+    store8(buf+31, 0x0A)
+    var cnt = 1;
+    if h != 0 then
+
+        while h > 0 do
+            var ch = load8(hex + (h % 16))
+            store8(buf+(31-cnt), ch)
+            h = h / 16
+            cnt = cnt + 1
+        end
+    else
+        cnt = 2;
+        store8(buf+30, 0x30)
+    end
+
+    store8(buf+(31-cnt), 'x')
+    store8(buf+(30-cnt), '0')
+    cnt = cnt + 2
+
+    syscall(0x2000004, 1, buf + (32 - cnt), cnt+1)
+end

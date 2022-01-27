@@ -302,7 +302,6 @@ class TripleValueType(Enum):
 class TripleValue:
     typ: TripleValueType
     value: Union[int, str, 'Triple', Tuple[int, int]]
-    token: Optional[Token] = None
 
     def __repr__(self) -> str:
         return trip_val_to_str(self)

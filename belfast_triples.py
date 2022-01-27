@@ -78,7 +78,6 @@ def print_triple(t:Triple):
     
     return trip_str
 
-
 def index_triples(trips:List[Triple]):
     for i,val in enumerate(trips):
         val.index = i
@@ -94,54 +93,54 @@ def triples_parse_program(ast_list: List[ASTNode_Base]):
 
 def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
     triples = []
-    trip_val:TripleValue = TripleValue(TripleValueType.UNKNOWN, 0, ast.value)
+    trip_val:TripleValue = TripleValue(TripleValueType.UNKNOWN, 0)
     match ast.typ:
         case ASTType.NUMBER:
-            trip_val = TripleValue(TripleValueType.CONSTANT, ast.num_value, ast.value)
+            trip_val = create_const_value(ast.num_value)
         case ASTType.STRING:
             labl = ctx.allocate_string(ast.ident_str)
-            trip_val = TripleValue(TripleValueType.STRING_REF, labl, ast.value)
+            trip_val = TripleValue(TripleValueType.STRING_REF, labl)
         case ASTType.BINARY_OP:
             l_trips, l_trip_val = ast_to_triples(ast.l_ast, ctx)
             r_trips, r_trip_val = ast_to_triples(ast.r_ast, ctx)
             op = TOKEN_OP_MAP[ast.value.typ]
             if op == Operator.LOGICAL_AND:
                 var_name = f"_T{len(triples)}_ss"
-                var_assign = TripleValue(TripleValueType.VAR_ASSIGN, var_name)
-                var_ref = TripleValue(TripleValueType.VAR_REF, var_name)
+                var_assign = create_var_assign_value(var_name)
+                var_ref = create_var_ref_value(var_name)
                 short_circuit_label = Triple(TripleType.LABEL, None, None, None)
                 end_label = Triple(TripleType.LABEL, None, None, None)
                 triples.extend(l_trips)
-                triples.append(Triple(TripleType.IF_COND, Operator.NE, l_trip_val, TripleValue(TripleValueType.TRIPLE_TARGET, short_circuit_label)))
+                triples.append(Triple(TripleType.IF_COND, Operator.NE, l_trip_val, create_target_value(short_circuit_label)))
                 triples.extend(r_trips)
-                triples.append(Triple(TripleType.BINARY_OP, Operator.NE, r_trip_val, TripleValue(TripleValueType.CONSTANT, 0)))
-                triples.append(Triple(TripleType.ASSIGN, None, var_assign, TripleValue(TripleValueType.TRIPLE_REF, triples[-1])))
-                triples.append(Triple(TripleType.GOTO, None, TripleValue(TripleValueType.TRIPLE_TARGET, end_label), None))
+                triples.append(Triple(TripleType.BINARY_OP, Operator.NE, r_trip_val, create_const_value(0)))
+                triples.append(Triple(TripleType.ASSIGN, None, var_assign, create_tref_value(triples[-1])))
+                triples.append(Triple(TripleType.GOTO, None, create_target_value(end_label), None))
                 triples.append(short_circuit_label)
-                triples.append(Triple(TripleType.ASSIGN, None, var_assign, TripleValue(TripleValueType.CONSTANT, 0)))
+                triples.append(Triple(TripleType.ASSIGN, None, var_assign, create_const_value(0)))
                 triples.append(end_label)
                 trip_val = var_ref
             elif op == Operator.LOGICAL_OR:
                 var_name = f"_T{len(triples)}_ss"
-                var_assign = TripleValue(TripleValueType.VAR_ASSIGN, var_name)
-                var_ref = TripleValue(TripleValueType.VAR_REF, var_name)
+                var_assign = create_var_assign_value(var_name)
+                var_ref = create_var_ref_value(var_name)
                 short_circuit_label = Triple(TripleType.LABEL, None, None, None)
                 end_label = Triple(TripleType.LABEL, None, None, None)
                 triples.extend(l_trips)
-                triples.append(Triple(TripleType.IF_COND, Operator.EQ, l_trip_val, TripleValue(TripleValueType.TRIPLE_TARGET, short_circuit_label)))
+                triples.append(Triple(TripleType.IF_COND, Operator.EQ, l_trip_val, create_target_value(short_circuit_label)))
                 triples.extend(r_trips)
-                triples.append(Triple(TripleType.BINARY_OP, Operator.NE, r_trip_val, TripleValue(TripleValueType.CONSTANT, 0)))
-                triples.append(Triple(TripleType.ASSIGN, None, var_assign, TripleValue(TripleValueType.TRIPLE_REF, triples[-1])))
-                triples.append(Triple(TripleType.GOTO, None, TripleValue(TripleValueType.TRIPLE_TARGET, end_label), None))
+                triples.append(Triple(TripleType.BINARY_OP, Operator.NE, r_trip_val, create_const_value(0)))
+                triples.append(Triple(TripleType.ASSIGN, None, var_assign, create_tref_value(triples[-1])))
+                triples.append(Triple(TripleType.GOTO, None, create_target_value(end_label), None))
                 triples.append(short_circuit_label)
-                triples.append(Triple(TripleType.ASSIGN, None, var_assign, TripleValue(TripleValueType.CONSTANT, 1)))
+                triples.append(Triple(TripleType.ASSIGN, None, var_assign, create_const_value(1)))
                 triples.append(end_label)
                 trip_val = var_ref
             else:
                 triples.extend(l_trips)
                 triples.extend(r_trips)
                 triples.append(Triple(TripleType.BINARY_OP,op=op, l_val=l_trip_val, r_val=r_trip_val))
-                trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
+                trip_val = create_tref_value(triples[-1])
         case ASTType.UNARY_OP:
             exp_trips, exp_trip_val = ast_to_triples(ast.ast_ref, ctx)
             triples.extend(exp_trips)
@@ -154,7 +153,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 triples.append(Triple(TripleType.BINARY_OP, op=Operator.EQ, l_val=exp_trip_val, r_val=TripleValue(TripleValueType.CONSTANT, 0)))
             else:
                 triples.append(Triple(TripleType.UNARY_OP, op=op, l_val=exp_trip_val, r_val=None))
-            trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
+            trip_val = create_tref_value(triples[-1])
         case ASTType.PRINT:
             exp_trips, exp_trip_val = ast_to_triples(ast.ast_ref, ctx)
             triples.extend(exp_trips)
@@ -166,20 +165,20 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             ctx.declare_variable(ast.ident_str)
             trips, trip_val = ast_to_triples(ast.ast_ref, ctx)
             triples.extend(trips)
-            triples.append(Triple(TripleType.ASSIGN, None, TripleValue(TripleValueType.VAR_ASSIGN, ast.ident_str), trip_val))
+            triples.append(Triple(TripleType.ASSIGN, None, create_var_assign_value(ast.ident_str), trip_val))
         case ASTType.VAR_REF:
             assert ctx.variable_exists(ast.ident_str), "This may be a bug in the parsing step"
-            trip_val = TripleValue(TripleValueType.VAR_REF, ast.ident_str, ast.value)
+            trip_val = create_var_ref_value(ast.ident_str)
         case ASTType.BUFFER_ALLOC:
-            trip_val = TripleValue(TripleValueType.BUFFER_REF, ctx.allocate_buffer(ast.num_value), ast.value)
+            trip_val = TripleValue(TripleValueType.BUFFER_REF, ctx.allocate_buffer(ast.num_value))
         case ASTType.ASSIGN:
             l_trips, l_trip_val = ast_to_triples(ast.l_ast, ctx)
             assert len(l_trips) == 0, "Multiple triples on Assign LHS not supported"
             assert l_trip_val.typ == TripleValueType.VAR_REF, "Expected variable ref on LHS of Assign"
             r_trips, r_trip_val = ast_to_triples(ast.r_ast, ctx)
             triples.extend(r_trips)
-            triples.append(Triple(TripleType.ASSIGN, op=None, l_val=TripleValue(TripleValueType.VAR_ASSIGN, value=l_trip_val.value), r_val=r_trip_val))
-            trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
+            triples.append(Triple(TripleType.ASSIGN, op=None, l_val=create_var_assign_value(l_trip_val.value), r_val=r_trip_val))
+            trip_val = create_tref_value(triples[-1])
         case ASTType.IF:
             cond_trips, cond_val = ast_to_triples(ast.cond_ast, ctx)
             scoped_ctx = ctx.create_subctx()
@@ -188,12 +187,12 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             end_goto_triple = None
             if ast.else_ast_block or ast.else_if_ast:
                 end_goto_triple = Triple(TripleType.LABEL, None, None, None)
-            triples.append(Triple(TripleType.IF_COND, op=Operator.NE, l_val=cond_val, r_val=TripleValue(TripleValueType.TRIPLE_TARGET, end_label_triple)))
+            triples.append(Triple(TripleType.IF_COND, op=Operator.NE, l_val=cond_val, r_val=create_target_value(end_label_triple)))
             for a in ast.then_ast_block:
                 a_trips, _ = ast_to_triples(a, scoped_ctx)
                 triples.extend(a_trips)
             if end_goto_triple is not None:
-                triples.append(Triple(TripleType.GOTO, None, TripleValue(TripleValueType.TRIPLE_TARGET, end_goto_triple), None))
+                triples.append(Triple(TripleType.GOTO, None, create_target_value(end_goto_triple), None))
             if ast.else_ast_block is not None:
                 else_scoped_ctx = ctx.create_subctx()
                 triples.append(end_label_triple)
@@ -217,20 +216,20 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             scoped_ctx.active_continue_label = cond_eval_label
             triples.append(cond_eval_label)
             triples.extend(cond_trips)
-            triples.append(Triple(TripleType.IF_COND, op=Operator.NE, l_val=cond_val, r_val=TripleValue(TripleValueType.TRIPLE_TARGET, end_label_triple)))
+            triples.append(Triple(TripleType.IF_COND, op=Operator.NE, l_val=cond_val, r_val=create_target_value(end_label_triple)))
             for a in ast.do_ast_block:
                 a_trips, _ = ast_to_triples(a, scoped_ctx)
                 triples.extend(a_trips)
-            triples.append(Triple(TripleType.GOTO, op=None, l_val=TripleValue(TripleValueType.TRIPLE_TARGET, cond_eval_label), r_val=None))
+            triples.append(Triple(TripleType.GOTO, op=None, l_val=create_target_value(cond_eval_label), r_val=None))
             triples.append(end_label_triple)
         case ASTType.BREAK:
             if ctx.active_break_label:
-                triples.append(Triple(TripleType.GOTO, op=None, l_val=TripleValue(TripleValueType.TRIPLE_TARGET, ctx.active_break_label), r_val=None))
+                triples.append(Triple(TripleType.GOTO, op=None, l_val=create_target_value(ctx.active_break_label), r_val=None))
             else:
                 compiler_error(ast.value.loc, "Break statement must be inside of a loop")
         case ASTType.CONTINUE:
             if ctx.active_continue_label:
-                triples.append(Triple(TripleType.GOTO, op=None, l_val=TripleValue(TripleValueType.TRIPLE_TARGET, ctx.active_continue_label), r_val=None))
+                triples.append(Triple(TripleType.GOTO, op=None, l_val=create_target_value(ctx.active_continue_label), r_val=None))
             else:
                 compiler_error(ast.value.loc, "Continue statement must be inside of a loop")
         case ASTType.SYSCALL:
@@ -244,12 +243,12 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 triples.append(Triple(TripleType.ARG, op=None, l_val=a_val, r_val=None, flags=reg_index))
                 reg_index += 1
             triples.append(Triple(TripleType.SYSCALL, op=None, l_val=s_val, r_val=None, flags=len(ast.args)-1))
-            trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1])
+            trip_val = create_tref_value(triples[-1])
         case ASTType.LOAD:
             ptr_exp_trips, ptr_exp_val = ast_to_triples(ast.ptr_exp, ctx)
             triples.extend(ptr_exp_trips)
             triples.append(Triple(TripleType.LOAD, None, ptr_exp_val, None, size=ast.size))
-            trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1])
+            trip_val = create_tref_value(triples[-1])
         case ASTType.STORE:
             ptr_exp_trips, ptr_exp_val = ast_to_triples(ast.ptr_exp, ctx)
             triples.extend(ptr_exp_trips)
@@ -266,7 +265,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             scoped_ctx.declared_vars.update(args)
             scoped_ctx.ctx_name = fun_name
             for i,a in enumerate(args):
-                fun_triples.append(Triple(TripleType.FUN_ARG_IN, None, TripleValue(TripleValueType.VAR_ASSIGN, a), None, flags=i))
+                fun_triples.append(Triple(TripleType.FUN_ARG_IN, None, create_var_assign_value(a), None, flags=i))
             for a in ast.body:
                 a_trips, _ = ast_to_triples(a, scoped_ctx)
                 fun_triples.extend(a_trips)
@@ -284,8 +283,82 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             assert False, f"Unhandled AST Type {ast.typ.name}"
     return triples, trip_val
 
-def triple_value_uses_triple(tv:TripleValue, triple:Triple):
-    return tv.typ == TripleValueType.TRIPLE_REF and tv.value == triple
+def create_tref_value(t: Triple):
+    return TripleValue(TripleValueType.TRIPLE_REF, t)
 
-def triple_uses_triple(t:Triple, used_triple:Triple):
-    return (t.l_val is not None and triple_value_uses_triple(t.l_val, used_triple)) or (t.r_val is not None and triple_value_uses_triple(t.r_val, used_triple))
+def create_target_value(t: Triple):
+    return TripleValue(TripleValueType.TRIPLE_TARGET, t)
+
+def create_const_value(i: int):
+    return TripleValue(TripleValueType.CONSTANT, i)
+
+def create_register_value(reg: int):
+    return TripleValue(TripleValueType.REGISTER, reg)
+
+def create_var_ref_value(var: str):
+    return TripleValue(TripleValueType.VAR_REF, var)
+
+def create_var_assign_value(var: str):
+    return TripleValue(TripleValueType.VAR_ASSIGN, var)
+
+def triple_value_reference_value(tv: TripleValue, ref: TripleValue):
+    if tv is not None and ref is not None:
+        if triple_values_equal(tv, ref):
+            return tv
+        elif tv.typ == TripleValueType.ADDRESS_COMPUTE:
+            if triple_values_equal(tv.value[0], ref):
+                return tv.value[0]
+            elif triple_values_equal(tv.value[1], ref):
+                return tv.value[1]
+    return None
+
+def get_triple_values(tv: TripleValue):
+    if tv.typ == TripleValueType.ADDRESS_COMPUTE:
+        return tv.value[0], tv.value[1]
+    return (tv,)
+
+# Returns true if the triple param contains a TripleRef value that references the ref_trip param
+def triple_references_triple(triple: Triple, ref_trip: Triple):
+    tref = create_tref_value(ref_trip)
+    return triple_value_reference_value(triple.l_val, tref) is not None or triple_value_reference_value(triple.r_val, tref) is not None
+
+def get_triple_reference_value(triple: Triple, ref_trip: Triple):
+    tref = create_tref_value(ref_trip)
+    lr = triple_value_reference_value(triple.l_val, tref)
+    if lr:
+        return lr
+    return triple_value_reference_value(triple.r_val, tref)
+
+def get_triple_label_reference_value(triple: Triple, ref_trip: Triple):
+    targ = create_target_value(ref_trip)
+    lr = triple_value_reference_value(triple.l_val, targ)
+    if lr:
+        return lr
+    return triple_value_reference_value(triple.r_val, targ)
+
+def triple_references_var(triple: Triple, var: str):
+    varref = create_var_ref_value(var)
+    return triple_value_reference_value(triple.l_val, varref) is not None or triple_value_reference_value(triple.r_val, varref) is not None
+
+def triple_assigns_var(triple: Triple, var: str):
+    varassign = create_var_assign_value(var)
+    return triple_value_reference_value(triple.l_val, varassign) is not None or triple_value_reference_value(triple.r_val, varassign) is not None
+
+def is_value_dataref(tv: TripleValue):
+    return tv.typ in [TripleValueType.VAR_REF, TripleValueType.REGISTER, TripleValueType.TRIPLE_REF, TripleValueType.ADDRESS_COMPUTE]
+
+def get_triple_referenced_values(triple: Triple):
+    vals: Set[TripleValue] = set()
+    if triple.typ != TripleType.ASSIGN and triple.typ != TripleType.REGMOVE:
+        if triple.l_val is not None and is_value_dataref(triple.l_val):
+            vals.update([v for v in get_triple_values(triple.l_val) if is_value_dataref(v)])
+    if triple.r_val is not None:
+        vals.update([v for v in get_triple_values(triple.r_val) if is_value_dataref(v)])
+    if triple.typ == TripleType.SYSCALL:
+        pass
+    elif triple.typ == TripleType.BINARY_OP:
+        match triple.op:
+            case Operator.DIVIDE | Operator.MODULUS:
+                vals.add(create_register_value(RAX_INDEX))
+                vals.add(create_register_value(RDX_INDEX))
+    return vals

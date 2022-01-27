@@ -340,6 +340,10 @@ def parse_tokens(tokens: List[Token]):
         if defining_function:
             compiler_error(tok.loc, "Nested functions are not supported")
         ident_tok = expect_token(TokenType.IDENTIFIER)
+
+        if ident_tok.value in declared_funs:
+            compiler_error(tok.loc, f"Redefinition of existing function {ident_tok.value}")
+
         args = []
         while True:
             tok = tokens[index]

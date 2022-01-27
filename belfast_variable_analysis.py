@@ -218,19 +218,18 @@ def does_value_need_color(tv: TripleValue):
 def get_defines(triple: Triple):
     match triple.typ:
         case TripleType.ASSIGN:
-            return (TripleValue(TripleValueType.VAR_REF, triple.l_val.value),)
+            return (create_var_ref_value(triple.l_val.value),)
         case TripleType.REGMOVE:
             return (triple.l_val,)
         case TripleType.BINARY_OP | TripleType.UNARY_OP | TripleType.NOP_REF:
             if (triple.flags & TF_BOOL_FORWARDED) > 0:
                 # Bool forwarded values are not stored
                 return ()
-            return (TripleValue(TripleValueType.TRIPLE_REF, triple),)
+            return (create_tref_value(triple),)
         case TripleType.SYSCALL:
-            return (TripleValue(TripleValueType.REGISTER, RAX_INDEX),)
-            return (TripleValue(TripleValueType.REGISTER, v) for v in ARG_REGISTERS[:triple.flags])
+            return (create_register_value(RAX_INDEX),)
         case TripleType.ARG:
-            return (TripleValue(TripleValueType.REGISTER, ARG_REGISTERS[triple.flags]),)
+            return (create_register_value(ARG_REGISTERS[triple.flags]),)
     return ()
 
 def get_uses(triple: Triple, colored_only=True):
@@ -246,14 +245,14 @@ def get_uses(triple: Triple, colored_only=True):
             if not colored_only or does_value_need_color(triple.l_val):
                 vals.append(triple.l_val)
             if triple.typ == TripleType.BINARY_OP and triple.op in [Operator.DIVIDE, Operator.MODULUS, Operator.MULTIPLY]:
-                vals.append(TripleValue(TripleValueType.REGISTER, RDX_INDEX))
+                vals.append(create_register_value(RDX_INDEX))
         case TripleType.UNARY_OP | TripleType.IF_COND | TripleType.PRINT | TripleType.NOP_USE | TripleType.LOAD | TripleType.ARG | TripleType.RETURN:
             if triple.typ == TripleType.IF_COND and triple.l_val.typ == TripleValueType.TRIPLE_REF and (triple.l_val.value.flags & TF_BOOL_FORWARDED) > 0:
                 return ()
             if not colored_only or does_value_need_color(triple.l_val):
                 vals = [triple.l_val,]
         case TripleType.SYSCALL:
-            vals = [TripleValue(TripleValueType.REGISTER, v) for v in ARG_REGISTERS[:triple.flags]]
+            vals = [create_register_value(v) for v in ARG_REGISTERS[:triple.flags]]
     new_vals = []
     for v in vals:
         if v.typ == TripleValueType.ADDRESS_COMPUTE:
@@ -266,84 +265,6 @@ def get_uses(triple: Triple, colored_only=True):
     if len(new_vals) > 0:
         return tuple(new_vals)
     return ()
-
-def get_value_liveness(blocks: List[TripleBlock], v: TripleValue) -> List[Tuple[int, int]]:
-    if v.typ == TripleValueType.TRIPLE_REF and v.value.typ == TripleType.BINARY_OP and (v.value.flags & TF_BOOL_FORWARDED) > 0:
-        return []
-    if v.typ == TripleValueType.UNKNOWN:
-        return []
-    sections: List[Tuple[int, int]] = []
-    sec_start = None
-    active_section = None
-    last_live_block = None
-    for b in blocks:
-        if v in b.in_vals:
-            if sec_start is None:
-                sec_start = b.vals_used[v].index
-            if v not in b.out_vals:
-                assert v in b.vals_used
-                active_section = (sec_start, b.vals_used[v].index)
-                # sections.append((sec_start, b.vals_used[v].index))
-        elif v in b.out_vals:
-            assert v in b.vals_assigned
-            if active_section:
-                sections.append(active_section)
-                active_section = None
-            if sec_start is None:
-                sec_start = b.vals_assigned[v].index
-            else:
-                assert last_live_block is not None
-                sections.append((sec_start, last_live_block.trips[-1].index))
-                sec_start = b.vals_assigned[v].index
-                active_section = None
-        elif v in b.vals_assigned:
-            assert sec_start is None
-            def does_trip_assign(t):
-                if v.typ == TripleValueType.TRIPLE_REF and v.value == t:
-                    return True
-                if t.typ == TripleType.ASSIGN and v.typ == TripleValueType.VAR_REF and v.value == t.l_val.value:
-                    return True
-                if t.typ == TripleType.REGMOVE and triple_values_equal(t.l_val, v):
-                    return True
-                if t.typ == TripleType.FUN_ARG_IN and v.typ == TripleValueType.REGISTER and ARG_REGISTERS[t.flags] == v.value:
-                    return True
-                if t.typ == TripleType.SYSCALL and v.typ == TripleValueType.REGISTER and v.value == RAX_INDEX:
-                    return True
-                if t.typ == TripleType.BINARY_OP:
-                    if t.op in [Operator.DIVIDE, Operator.MODULUS]:
-                        if v.typ == TripleValueType.REGISTER and v.value in [RAX_INDEX, RDX_INDEX]:
-                            return True
-                return False
-            assignments = list(filter(lambda x: does_trip_assign(x), b.trips))
-            references = list(filter(lambda x: triple_references_value(x, v), b.trips))
-            if v.typ == TripleValueType.REGISTER:
-                pass
-            for i in range(len(assignments)):
-                a = assignments[i]
-                if v.typ == TripleValueType.REGISTER and a.typ not in [TripleType.REGMOVE, TripleType.FUN_ARG_IN]:
-                    continue
-                end_ind = assignments[i+1].index if i < len(assignments) - 1 else b.trips[-1].index
-                refs_between = sorted([x for x in references if a.index < x.index <= end_ind], key = lambda x: x.index)
-                if len(refs_between) > 0:
-                    sections.append((a.index, refs_between[-1].index))
-            # start_ind = b.vals_assigned[v].index + get_triple_liveness_offset(b.vals_assigned[v])
-            # if len(references) > 0:
-            #     if start_ind <= references[-1].index:
-            #         sections.append((start_ind, references[-1].index))
-            #     else:
-            #         assert False
-            # else:
-            #     pass
-                # if start_ind <= b.vals_assigned[v].index:
-                #     sections.append((start_ind, b.vals_assigned[v].index))
-                # else:
-                #     assert False
-        if v in b.in_vals or v in b.out_vals:
-            last_live_block = b
-    if sec_start is not None:
-        assert last_live_block is not None
-        sections.append((sec_start, last_live_block.trips[-1].index))
-    return sections
 
 def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
     did_change = False
@@ -392,10 +313,10 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
             loops.add((dom_edges[0], b))
 
     for b1,b2 in loops:
-        print(f'Loop from {b1.trips[0].index} to {b2.trips[-1].index}')
+        # print(f'Loop from {b1.trips[0].index} to {b2.trips[-1].index}')
         blocks_in = [b for b in blocks if b1.index <= b.index <= b2.index]
         # TODO: better block in loop checks
-        print(blocks_in)
+        # print(blocks_in)
         loop_invariants = set()
         loop_defines = {}
         for b in blocks_in:
@@ -423,7 +344,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
             if len(loop_invariants) == len_invariants:
                 break
         
-        print(loop_defines)
+        # print(loop_defines)
 
         loop_pre_header = []
         triple_inserts = []
@@ -446,7 +367,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                             if len(const_vals) == 1 and len(var_vals) == 1:
                                 basic_induction_vars.append(d)
         
-        print(basic_induction_vars)
+        # print(basic_induction_vars)
 
         derived_induction_vars = {}
 
@@ -513,7 +434,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                         assert v is not None
                         derived_induction_vars[d] = (v, a, b)
 
-        print(derived_induction_vars)
+        # print(derived_induction_vars)
         ind_defines = []
         ind_step_trips = []
         for d,(v,a,b) in derived_induction_vars.items():
@@ -523,26 +444,26 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
             basic_var = v
             new_varname = f"{d}_inductive"
             if a != 1:
-                t = Triple(TripleType.BINARY_OP, Operator.MULTIPLY, v, TripleValue(TripleValueType.CONSTANT, a))
-                v = TripleValue(TripleValueType.TRIPLE_REF, t)
+                t = Triple(TripleType.BINARY_OP, Operator.MULTIPLY, v, create_const_value(a))
+                v = create_tref_value(t)
                 loop_pre_header.append(t)
             if b != 0:
-                t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, TripleValue(TripleValueType.CONSTANT, b))
-                v = TripleValue(TripleValueType.TRIPLE_REF, t)
+                t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, create_const_value(b))
+                v = create_tref_value(t)
                 loop_pre_header.append(t)
-            t = Triple(TripleType.ASSIGN, None, TripleValue(TripleValueType.VAR_ASSIGN, new_varname), v)
-            v = TripleValue(TripleValueType.TRIPLE_REF, t)
+            t = Triple(TripleType.ASSIGN, None, create_var_assign_value(new_varname), v)
+            v = create_tref_value(t)
             loop_pre_header.append(t)
             loop_define = loop_defines[d][0]
-            loop_define.r_val = TripleValue(TripleValueType.VAR_REF, new_varname)
+            loop_define.r_val = create_var_ref_value(new_varname)
             ind_defines.append(loop_define)
 
             ind = loop_defines[basic_var][0].index + 1
-            t = Triple(TripleType.BINARY_OP, Operator.PLUS, TripleValue(TripleValueType.VAR_REF, new_varname), TripleValue(TripleValueType.CONSTANT, a))
+            t = Triple(TripleType.BINARY_OP, Operator.PLUS, create_var_ref_value(new_varname), create_const_value(a))
             t.index = ind
             triple_inserts.append(t)
             ind_step_trips.append(t)
-            t = Triple(TripleType.ASSIGN, None, TripleValue(TripleValueType.VAR_ASSIGN, new_varname), TripleValue(TripleValueType.TRIPLE_REF, t))
+            t = Triple(TripleType.ASSIGN, None, create_var_assign_value(new_varname), create_tref_value(t))
             t.index = ind + 1
             triple_inserts.append(t)
             ind_step_trips.append(t)

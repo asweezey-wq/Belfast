@@ -1,5 +1,6 @@
 from os import remove
 from re import T
+from tkinter import E
 from belfast_triples import *
 from typing import *
 from math import log2
@@ -19,61 +20,6 @@ OPTIMIZATION_FLAGS = {
 REMOVAL_HINTS = {}
 ADD_HINTS = {}
 
-# Returns true if the triple param contains a TripleRef value that references the ref_trip param
-def triple_references_triple(triple: Triple, ref_trip: Triple):
-    if triple.l_val is not None and triple.l_val.typ == TripleValueType.TRIPLE_REF and triple.l_val.value == ref_trip:
-        return True
-    if triple.r_val is not None and triple.r_val.typ == TripleValueType.TRIPLE_REF and triple.r_val.value == ref_trip:
-        return True
-    return False
-
-def get_triple_reference_value(triple: Triple, ref_trip: Triple):
-    if triple.l_val is not None and triple.l_val.typ == TripleValueType.TRIPLE_REF and triple.l_val.value == ref_trip:
-        return triple.l_val
-    if triple.r_val is not None and triple.r_val.typ == TripleValueType.TRIPLE_REF and triple.r_val.value == ref_trip:
-        return triple.r_val
-    return None
-
-def get_triple_label_reference_value(triple: Triple, ref_trip: Triple):
-    if triple.l_val is not None and triple.l_val.typ == TripleValueType.TRIPLE_TARGET and triple.l_val.value == ref_trip:
-        return triple.l_val
-    if triple.r_val is not None and triple.r_val.typ == TripleValueType.TRIPLE_TARGET and triple.r_val.value == ref_trip:
-        return triple.r_val
-    return None
-
-def triple_references_var(triple: Triple, var: str):
-    if triple.l_val is not None and triple.l_val.typ == TripleValueType.VAR_REF and triple.l_val.value == var:
-        return True
-    if triple.r_val is not None and triple.r_val.typ == TripleValueType.VAR_REF and triple.r_val.value == var:
-        return True
-    return False
-
-def triple_assigns_var(triple: Triple, var: str):
-    if triple.typ != TripleType.ASSIGN: return False
-    if triple.l_val is not None and triple.l_val.typ == TripleValueType.VAR_ASSIGN and triple.l_val.value == var:
-        return True
-    if triple.r_val is not None and triple.r_val.typ == TripleValueType.VAR_ASSIGN and triple.r_val.value == var:
-        return True
-    return False
-
-def triple_references_value(triple: Triple, tv: TripleValue):
-    if triple.typ == TripleType.SYSCALL:
-        if tv.typ == TripleValueType.REGISTER:
-            syscall_registers = list(map(lambda x: ARG_REGISTERS[x], list(range(triple.flags))))
-            if tv.value in syscall_registers:
-                return True
-    elif triple.typ == TripleType.CALL:
-        if tv.typ == TripleValueType.REGISTER:
-            call_regs = list(map(lambda x: ARG_REGISTERS[x], list(range(triple.flags))))
-            if tv.value in call_regs:
-                return True
-    elif triple.typ == TripleType.BINARY_OP:
-        if tv.typ == TripleValueType.REGISTER:
-            if triple.op in [Operator.DIVIDE, Operator.MODULUS]:
-                if tv.value == RAX_INDEX or tv.value == RDX_INDEX:
-                    return True
-    return (triple.l_val is not None and triple_values_equal(triple.l_val, tv)) or (triple.r_val is not None and triple_values_equal(triple.r_val, tv))
-
 # For common expressions
 def triples_match(t1: Triple, t2: Triple):
     if t1.typ != t2.typ or ((t1.l_val is None) != (t2.l_val is None)) or ((t1.r_val is None) != (t2 is None)):
@@ -88,25 +34,6 @@ def triples_match(t1: Triple, t2: Triple):
             if t1.op != t2.op:
                 return False
     return (t1.l_val is None or triple_values_equal(t1.l_val, t2.l_val) or (is_reflexive and triple_values_equal(t1.l_val, t2.r_val))) and (t1.r_val is None or triple_values_equal(t1.r_val, t2.r_val) or (is_reflexive and (triple_values_equal(t1.r_val, t2.l_val))))
-
-def is_value_dataref(tv: TripleValue):
-    return tv.typ in [TripleValueType.VAR_REF, TripleValueType.REGISTER, TripleValueType.TRIPLE_REF]
-
-def get_triple_referenced_values(triple: Triple):
-    vals: Set[TripleValue] = set()
-    if triple.typ != TripleType.ASSIGN and triple.typ != TripleType.REGMOVE:
-        if triple.l_val is not None and is_value_dataref(triple.l_val):
-            vals.add(triple.l_val)
-    if triple.r_val is not None and is_value_dataref(triple.r_val):
-        vals.add(triple.r_val)
-    if triple.typ == TripleType.SYSCALL:
-        pass
-    elif triple.typ == TripleType.BINARY_OP:
-        match triple.op:
-            case Operator.DIVIDE | Operator.MODULUS:
-                vals.add(TripleValue(TripleValueType.REGISTER, RAX_INDEX))
-                vals.add(TripleValue(TripleValueType.REGISTER, RDX_INDEX))
-    return vals
 
 def is_zero(tv: TripleValue):
     return tv.typ == TripleValueType.CONSTANT and tv.value == 0
@@ -130,7 +57,7 @@ def null_operation_eval(trip: Triple):
                         return lv
                 case Operator.MULTIPLY:
                     if is_zero(lv) or is_zero(rv):
-                        return TripleValue(TripleValueType.CONSTANT, 0)
+                        return create_const_value(0)
                     elif is_one(lv):
                         return rv
                     elif is_one(rv):
@@ -139,23 +66,23 @@ def null_operation_eval(trip: Triple):
                     if is_zero(rv):
                         compiler_error(trip.loc, "Division by zero")
                     elif is_one(rv):
-                        return TripleValue(TripleValueType.CONSTANT, 0) if trip.op == Operator.MODULUS else lv
+                        return create_const_value(0) if trip.op == Operator.MODULUS else lv
                     elif is_zero(lv):
-                        return TripleValue(TripleValueType.CONSTANT, 0)
+                        return create_const_value(0)
                 case Operator.BITWISE_AND:
                     if is_zero(lv) or is_zero(rv):
-                        return TripleValue(TripleValueType.CONSTANT, 0)
+                        return create_const_value(0)
                 case Operator.SHIFT_LEFT | Operator.SHIFT_RIGHT:
                     if is_zero(lv):
-                        return TripleValue(TripleValueType.CONSTANT, 0)
+                        return create_const_value(0)
                     elif is_zero(rv):
                         return lv
                 case Operator.EQ:
                     if triple_values_equal(lv, rv):
-                        return TripleValue(TripleValueType.CONSTANT, 1)
+                        return create_const_value(1)
                 case Operator.NE:
                     if triple_values_equal(lv, rv):
-                        return TripleValue(TripleValueType.CONSTANT, 0)
+                        return create_const_value(0)
     return None
 
 def strength_reduce(triple: Triple):
@@ -178,7 +105,7 @@ def strength_reduce(triple: Triple):
                             l2 = log2(triple.r_val.value)
                             if l2 == int(l2):
                                 triple.op = Operator.SHIFT_LEFT
-                                triple.r_val = TripleValue(TripleValueType.CONSTANT, int(l2))
+                                triple.r_val = create_const_value(int(l2))
                                 REMOVAL_HINTS[triple] = "Strength Reduce"
                                 return True
                         elif triple.r_val.value == -1:
@@ -193,7 +120,7 @@ def strength_reduce(triple: Triple):
                             if l2 == int(l2):
                                 triple.op = Operator.SHIFT_LEFT
                                 triple.l_val = triple.r_val
-                                triple.r_val = TripleValue(TripleValueType.CONSTANT, int(l2))
+                                triple.r_val = create_const_value(int(l2))
                                 REMOVAL_HINTS[triple] = "Strength Reduce"
                                 return True
                         elif triple.l_val.value == -1:
@@ -209,7 +136,7 @@ def strength_reduce(triple: Triple):
                         l2 = log2(triple.r_val.value)
                         if l2 == int(l2):
                             triple.op = Operator.SHIFT_RIGHT
-                            triple.r_val = TripleValue(TripleValueType.CONSTANT, int(l2))
+                            triple.r_val = create_const_value(int(l2))
                             REMOVAL_HINTS[triple] = "Strength Reduce"
                             return True
                 case Operator.MODULUS:
@@ -217,7 +144,7 @@ def strength_reduce(triple: Triple):
                         l2 = log2(triple.r_val.value)
                         if l2 == int(l2):
                             triple.op = Operator.BITWISE_AND
-                            triple.r_val = TripleValue(TripleValueType.CONSTANT, triple.r_val.value - 1)
+                            triple.r_val = create_const_value(triple.r_val.value - 1)
                             REMOVAL_HINTS[triple] = "Strength Reduce"
                             return True
 
@@ -482,7 +409,7 @@ def build_control_flow(trips: List[Triple], trip_ctx: TripleContext) -> List[Tri
                 new_block.in_blocks.append(this_block)
                 this_block.out_blocks.append(new_block)
                 new_block.index = index
-            this_block = new_block
+                this_block = new_block
             this_block.trips.append(t)
             continue
         elif t.typ == TripleType.GOTO:
@@ -531,30 +458,30 @@ def evaluate_block_value_usage(b: TripleBlock) -> Set[TripleValue]:
         if t.typ == TripleType.LABEL or t.typ == TripleType.GOTO:
             continue
         if does_triple_produce_data(t):
-            t_ref = TripleValue(TripleValueType.TRIPLE_REF, t)
+            t_ref = create_tref_value(t)
             b.vals_assigned[t_ref] = t
             vals_assigned.add(t_ref)
         if t.typ == TripleType.SYSCALL:
             for r in range(t.flags):
                 reg = ARG_REGISTERS[r]
-                val = TripleValue(TripleValueType.REGISTER, reg)
+                val = create_register_value(reg)
                 vals_used.add(val)
                 if val not in b.vals_assigned:
                     b.vals_used[val] = t
-            rax_ref = TripleValue(TripleValueType.REGISTER, RAX_INDEX)
+            rax_ref = create_register_value(RAX_INDEX)
             if not rax_ref in vals_used:
                 b.vals_assigned[rax_ref] = t
             vals_assigned.add(rax_ref)
         elif t.typ == TripleType.FUN_ARG_IN:
             reg = ARG_REGISTERS[t.flags]
-            val = TripleValue(TripleValueType.REGISTER, reg)
+            val = create_register_value(reg)
             vals_assigned.add(val)
             if val not in b.vals_assigned:
                 b.vals_assigned[val] = t
             else:
                 assert False
             assert t.l_val.typ == TripleValueType.VAR_ASSIGN
-            var_val = TripleValue(TripleValueType.VAR_REF, t.l_val.value)
+            var_val = create_var_ref_value(t.l_val.value)
             vals_assigned.add(var_val)
             if var_val not in b.vals_assigned:
                 b.vals_assigned[var_val] = t
@@ -567,7 +494,7 @@ def evaluate_block_value_usage(b: TripleBlock) -> Set[TripleValue]:
         match t.typ:
             case TripleType.ASSIGN:
                 assert t.l_val.typ == TripleValueType.VAR_ASSIGN
-                var_ref = TripleValue(TripleValueType.VAR_REF, t.l_val.value)
+                var_ref = create_var_ref_value(t.l_val.value)
                 if not var_ref in vals_used:
                     # if var_ref in b.vals_assigned:
                     #     # If there was a previous assignment before use, remove this
@@ -724,7 +651,7 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
             if t.typ == TripleType.ASSIGN and OPTIMIZATION_FLAGS['unused-code']:
                 assert t.l_val.typ == TripleValueType.VAR_ASSIGN
                 variable = t.l_val.value
-                var_ref = TripleValue(TripleValueType.VAR_REF, variable)
+                var_ref = create_var_ref_value(variable)
                 if var_ref in b.vals_assigned and b.vals_assigned[var_ref] != t:
                     trips.remove(t)
                     REMOVAL_HINTS[t] = "Assignment without use"
