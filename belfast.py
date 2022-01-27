@@ -640,7 +640,6 @@ if __name__ == '__main__':
     argp = argparse.ArgumentParser(description='The Belfast Compiler')
     argp.add_argument('file', help='The file input to the compiler')
     argp.add_argument('-o', '--output', dest='output', help='The output assembly file', default='prog.asm')
-    argp.add_argument('--legacy', action='store_true', help='Use the legacy variable allocation')
     argp.add_argument('--no-comments', action='store_true', help='Turn off the comments generated in assembly')
     argp.add_argument('--ir-only', action='store_true', help='Turn off the comments generated in assembly')
     args = argp.parse_args()
@@ -669,16 +668,12 @@ if __name__ == '__main__':
         index_triples(f_trips)
         for t in f_trips:
             prog_tripstr += f"{print_triple(t)}\n"
-        if not args.legacy:
-            f_trips = optimize_x86(f_trips, trip_ctx)
-            x86_tripstr += f"FUNCTION {f_name}\n"
-            x86_tripstr += output_x86_trips_to_str(f_trips, trip_ctx)
-            x86_tripstr += "\n"
+        f_trips = optimize_x86(f_trips, trip_ctx)
+        x86_tripstr += f"FUNCTION {f_name}\n"
+        x86_tripstr += output_x86_trips_to_str(f_trips, trip_ctx)
+        x86_tripstr += "\n"
         if not args.ir_only:
-            if args.legacy:
-                asm += triples_to_asm(f_trips, trip_ctx, args.no_comments)
-            else:
-                asm += convert_function_to_asm(f_name, f_trips, trip_ctx, args.no_comments)
+            convert_function_to_asm(f_name, f_trips, trip_ctx, args.no_comments)
         prog_tripstr += "\n"
 
     # with open('print_d.asm') as f:
@@ -690,15 +685,11 @@ if __name__ == '__main__':
     index_triples(trips)
     for t in trips:
         prog_tripstr += f"{print_triple(t)}\n"
-    if not args.legacy:
-        trips = optimize_x86(trips, trip_ctx)
-        x86_tripstr += "MAIN\n"
-        x86_tripstr += output_x86_trips_to_str(trips, trip_ctx)
+    trips = optimize_x86(trips, trip_ctx)
+    x86_tripstr += "MAIN\n"
+    x86_tripstr += output_x86_trips_to_str(trips, trip_ctx)
     if not args.ir_only:
-        if args.legacy:
-            asm += triples_to_asm(trips, trip_ctx, args.no_comments)
-        else:
-            asm += convert_function_to_asm("main", trips, trip_ctx, args.no_comments)
+        asm += convert_function_to_asm("main", trips, trip_ctx, args.no_comments)
 
     with open('prog.tripstr', 'w') as f:
         f.write(prog_tripstr)

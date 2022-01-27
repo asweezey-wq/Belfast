@@ -345,7 +345,6 @@ class Triple:
     l_val:Optional[TripleValue]
     r_val:Optional[TripleValue]
     index:int = -1
-    loc:Optional['TripleLoc'] = None
     flags:int = 0
     last_use:int = 0
     size:int = 64
@@ -358,13 +357,6 @@ class Triple:
 
     def __repr__(self) -> str:
         return f"{str(self.index) + ': ' if self.index >= 0 else ''}" + f"{self.typ.name} " + (f"{self.op.name} " if self.op is not None else "") + f"{str(self.l_val) if self.l_val is not None else ''} {str(self.r_val if self.r_val is not None else '')}"
-
-class TripleLocType(Enum):
-    CONSTANT = auto()
-    REGISTER = auto()
-    MEMORY_ADDR_LABEL = auto()
-    IN_MEMORY_AT_LABEL = auto()
-    IN_MEMORY_AT_ADDRESS = auto()
 
 RDI_INDEX = 6
 RAX_INDEX = 1
@@ -423,20 +415,6 @@ def reg_str_for_size(index:int, size:int=64):
         assert False, f"Size {size} not supported"
 
 data_registers = ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi']
-
-@dataclass
-class TripleLoc:
-    typ: TripleLocType
-    value: Union[int, str]
-    offset_from: Optional['TripleLoc'] = None
-
-@dataclass
-class RegisterData:
-    index: int
-    is_data_reg: bool
-    has_data: bool
-    triple_value_in: Optional[TripleValue]
-    data_not_needed: bool
 
 CMP_OP_INSTR_MAP = {Operator.GE: 'ge', Operator.LE: 'le', Operator.GT: 'g', Operator.LT: 'l', Operator.EQ: 'e', Operator.NE: 'ne'}
 INVERT_CMP_OP = {
