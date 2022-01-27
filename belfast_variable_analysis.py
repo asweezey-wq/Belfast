@@ -442,7 +442,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                 continue
             t = None
             basic_var = v
-            new_varname = f"{d}_inductive"
+            new_varname = f"${d}_inductive"
             if a != 1:
                 t = Triple(TripleType.BINARY_OP, Operator.MULTIPLY, v, create_const_value(a))
                 v = create_tref_value(t)
