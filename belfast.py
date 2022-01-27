@@ -9,7 +9,7 @@ import copy
 
 keyword_regex = r'(?:(' + ('|'.join(KEYWORD_NAMES.keys())) + r')(?=\s|$|;))'
 builtins_regex = r'(' + ('|'.join(BUILTINS_NAMES.keys())) + r')'
-lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|(-?[0-9]+)|(<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
+lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|(-?[0-9]+)|(<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^!~])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
 # print(lang_regex)
 regex_type_map = [
     TokenType.KEYWORD,
@@ -107,6 +107,10 @@ def tokenize_string(filepath:str, input_string: str):
                             typ = TokenType.BITWISE_OR
                         case '^':
                             typ = TokenType.BITWISE_XOR
+                        case '~':
+                            typ = TokenType.BITWISE_NOT
+                        case '!':
+                            typ = TokenType.LOGICAL_NOT
                         case _:
                             assert False, f"Unhandled token '{t[6]}'"
                 elif t[8] is not None:
@@ -398,7 +402,7 @@ def parse_tokens(tokens: List[Token]):
         [Operator.ASSIGN],
     ]
 
-    unary_ops = [Operator.MINUS]
+    unary_ops = [Operator.MINUS, Operator.LOGICAL_NOT, Operator.BITWISE_NOT]
 
     def parse_base():
         tok = tokens[index]

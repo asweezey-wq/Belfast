@@ -212,6 +212,14 @@ def strength_reduce(triple: Triple):
                             triple.r_val = TripleValue(TripleValueType.CONSTANT, int(l2))
                             REMOVAL_HINTS[triple] = "Strength Reduce"
                             return True
+                case Operator.MODULUS:
+                    if triple.r_val.typ == TripleValueType.CONSTANT:
+                        l2 = log2(triple.r_val.value)
+                        if l2 == int(l2):
+                            triple.op = Operator.BITWISE_AND
+                            triple.r_val = TripleValue(TripleValueType.CONSTANT, triple.r_val.value - 1)
+                            REMOVAL_HINTS[triple] = "Strength Reduce"
+                            return True
 
     return False
                     
@@ -262,6 +270,8 @@ def evaluate_triple_const(triple: Triple):
                 match triple.op:
                     case Operator.NEGATE:
                         return -n1
+                    case Operator.BITWISE_NOT:
+                        return ~n1
                     case _:
                         return None
     return None
@@ -825,8 +835,6 @@ def get_triple_delta(old_trips: List[Triple], new_trips: List[Triple]):
                 C[(i, j)] = C[(i - 1, j - 1)] + 1
             else:
                 C[(i, j)] = max(C[(i, j - 1)], C[(i - 1, j)])
-
-    print(C[(len(old_trips), len(new_trips))])
 
     def print_diff(i, j):
 

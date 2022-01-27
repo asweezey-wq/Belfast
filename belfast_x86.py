@@ -584,7 +584,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                         case _:
                             assert False, f"Unimplemented operator {t.op.name}"
                 case TripleType.UNARY_OP:
-                    if t_reg is not None and lv.typ in (TripleValueType.CONSTANT, TripleValueType.ON_STACK):
+                    if t_reg is not None and ((lv.typ in (TripleValueType.CONSTANT, TripleValueType.ON_STACK)) or (lv.typ == TripleValueType.REGISTER and lv.value != t_reg)):
                         write_asm(move_instr(t_reg, lv))
                         lv = TripleValue(TripleValueType.REGISTER, t_reg)
                     assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
@@ -592,6 +592,9 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                         case Operator.NEGATE:
                             assert t_reg is not None, "Expected this value to be assigned to a register"
                             write_asm(f"neg {reg_str_for_size(t_reg)}")
+                        case Operator.BITWISE_NOT:
+                            assert t_reg is not None, "Expected this value to be assigned to a register"
+                            write_asm(f"not {reg_str_for_size(t_reg)}")
                         case _:
                             assert False, f"Unimplemented operator {t.op.name}"
                 case TripleType.LABEL:

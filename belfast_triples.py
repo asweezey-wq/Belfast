@@ -116,7 +116,11 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             if op == Operator.MINUS:
                 # Unary minus is a negation
                 op = Operator.NEGATE
-            triples.append(Triple(TripleType.UNARY_OP, op=op, l_val=exp_trip_val, r_val=None))
+            
+            if op == Operator.LOGICAL_NOT:
+                triples.append(Triple(TripleType.BINARY_OP, op=Operator.EQ, l_val=exp_trip_val, r_val=TripleValue(TripleValueType.CONSTANT, 0)))
+            else:
+                triples.append(Triple(TripleType.UNARY_OP, op=op, l_val=exp_trip_val, r_val=None))
             trip_val = TripleValue(TripleValueType.TRIPLE_REF, triples[-1], ast.value)
         case ASTType.PRINT:
             exp_trips, exp_trip_val = ast_to_triples(ast.ast_ref, ctx)
