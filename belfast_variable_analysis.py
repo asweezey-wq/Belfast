@@ -226,8 +226,8 @@ def get_defines(triple: Triple):
                 # Bool forwarded values are not stored
                 return ()
             return (create_tref_value(triple),)
-        case TripleType.SYSCALL:
-            return (create_register_value(RAX_INDEX),)
+        case TripleType.CALL | TripleType.SYSCALL:
+            return (create_tref_value(triple),)
         case TripleType.ARG:
             return (create_register_value(ARG_REGISTERS[triple.flags]),)
     return ()

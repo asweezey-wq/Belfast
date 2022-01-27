@@ -538,6 +538,8 @@ def parse_tokens(tokens: List[Token]):
                         return_ast = ASTNode_Base(ASTType.BREAK, expect_keyword(Keyword.BREAK))
                     case Keyword.CONTINUE:
                         return_ast = ASTNode_Base(ASTType.CONTINUE, expect_keyword(Keyword.CONTINUE))
+                    case Keyword.RETURN:
+                        return_ast = ASTNode_Single(ASTType.RETURN, expect_keyword(Keyword.RETURN), parse_expression())
                     case _:
                         compiler_error(tok.loc, f"Unexpected keyword {tok.value.name}")
             case _:

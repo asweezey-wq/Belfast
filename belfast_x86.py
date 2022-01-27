@@ -173,10 +173,21 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
     coalesces_performed = {}
     values_coalesced = {}
 
+    return_trips = [t for t in trips if t.typ == TripleType.RETURN]
+    return_var = None
+    if len(return_trips) == 1:
+        if return_trips[0].l_val.typ == TripleValueType.VAR_REF:
+            return_var = return_trips[0].l_val.value
+    elif len(return_trips) > 1:
+        assert False
+
     for v in interf_graph:
         match v.typ:
             case TripleValueType.REGISTER:
                 precolors[v] = DATA_REGISTERS.index(v.value)
+            case TripleValueType.VAR_REF:
+                if return_var and v.value == return_trips[0].l_val.value:
+                    precolors[v] = DATA_REGISTERS.index(RAX_INDEX)
             case TripleValueType.TRIPLE_REF:
                 t = v.value
                 match t.typ:
@@ -186,7 +197,7 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
                                 precolors[v] = DATA_REGISTERS.index(RDX_INDEX)
                             case Operator.DIVIDE | Operator.MULTIPLY:
                                 precolors[v] = DATA_REGISTERS.index(RAX_INDEX)
-                    case TripleType.SYSCALL:
+                    case TripleType.SYSCALL | TripleType.CALL:
                         precolors[v] = DATA_REGISTERS.index(RAX_INDEX)
 
     while True:
@@ -679,13 +690,20 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     pass
                 case TripleType.CALL:
                     # TODO: Optimize saves/loads
-                    save_regs = list(filter(lambda x: x in DATA_REGISTERS, trip_ctx.get_all_used_registers(t.index+1)))
+                    save_regs = list(filter(lambda x: x in DATA_REGISTERS and x != RAX_INDEX, trip_ctx.get_all_used_registers(t.index+1)))
                     for r in save_regs:
                         write_asm(f"push {reg_str_for_size(r)}")
                     assert lv is not None and lv.typ == TripleValueType.FUN_LABEL
                     write_asm(f"call {triple_value_str(lv)}")
                     for r in reversed(save_regs):
                         write_asm(f"pop {reg_str_for_size(r)}")
+                case TripleType.RETURN:
+                    l_reg = trip_ctx.get_allocated_register(t.l_val, t.index)
+                    if l_reg is None or l_reg != RAX_INDEX:
+                        if t.l_val.typ == TripleValueType.CONSTANT and t.l_val.value == 0:
+                            write_asm(f"xor rax, rax")
+                        else:
+                            write_asm(move_instr(RAX_INDEX, t.l_val))
                 case _:
                     assert False, f"Triple Type {t.typ.name} not implemented"
         except AssertionError as e:
@@ -694,8 +712,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
             sys.exit(1)
 
     if stack_space_alloc > 0:
-            write_asm(f"add rsp, {stack_space_alloc}")
-    asm += "    xor rax,rax\n"
+        write_asm(f"add rsp, {stack_space_alloc}")
     asm += "    ret\n\n"
 
     return asm

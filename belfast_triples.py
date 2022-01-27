@@ -16,6 +16,9 @@ class TripleContext:
         self.memory_spill_register = None
         self.active_break_label = None
         self.active_continue_label = None
+        self.function_return_label = None
+        self.function_return_var = None
+        self.did_function_return = False
         self.ctx_name = ''
         self.has_generated_print_code = False
 
@@ -85,10 +88,16 @@ def index_triples(trips:List[Triple]):
 def triples_parse_program(ast_list: List[ASTNode_Base]):
     ctx = TripleContext()
     ctx.ctx_name = 'main'
+    ret_label = Triple(TripleType.LABEL, None, None, None)
+    ctx.function_return_label = ret_label
+    ctx.function_return_var = "$main_return"
     trips = []
     for a in ast_list:
         t, _ = ast_to_triples(a, ctx)
         trips.extend(t)
+    trips.append(Triple(TripleType.ASSIGN, None, create_var_assign_value(ctx.function_return_var), create_const_value(0)))
+    trips.append(ret_label)
+    trips.append(Triple(TripleType.RETURN, None, create_var_ref_value(ctx.function_return_var), None))
     return trips, ctx
 
 def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
@@ -264,11 +273,17 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             scoped_ctx.string_offs = len(ctx.strings) + ctx.string_offs
             scoped_ctx.declared_vars.update(args)
             scoped_ctx.ctx_name = fun_name
+            end_label = Triple(TripleType.LABEL, None, None, None)
+            scoped_ctx.function_return_label = end_label
+            scoped_ctx.function_return_var = f"${fun_name}_return"
             for i,a in enumerate(args):
                 fun_triples.append(Triple(TripleType.FUN_ARG_IN, None, create_var_assign_value(a), None, flags=i))
             for a in ast.body:
                 a_trips, _ = ast_to_triples(a, scoped_ctx)
                 fun_triples.extend(a_trips)
+            fun_triples.append(Triple(TripleType.ASSIGN, None, create_var_assign_value(scoped_ctx.function_return_var), create_const_value(0)))
+            fun_triples.append(end_label)
+            fun_triples.append(Triple(TripleType.RETURN, None, create_var_ref_value(scoped_ctx.function_return_var), None))
             ctx.buffer_offs += len(scoped_ctx.buffers)
             ctx.string_offs += len(scoped_ctx.strings)
             ctx.declare_function(fun_name, fun_triples, scoped_ctx)
@@ -279,6 +294,13 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 triples.extend(arg_trips)
                 triples.append(Triple(TripleType.ARG, None, arg_val, None, flags=i))
             triples.append(Triple(TripleType.CALL, None, TripleValue(TripleValueType.FUN_LABEL, fun_name), None, flags=len(ast.args)))
+            trip_val = create_tref_value(triples[-1])
+        case ASTType.RETURN:
+            assert ctx.function_return_label is not None and ctx.function_return_var is not None
+            exp_trips, exp_val = ast_to_triples(ast.ast_ref, ctx)
+            triples.extend(exp_trips)
+            triples.append(Triple(TripleType.ASSIGN, None, create_var_assign_value(ctx.function_return_var), exp_val))
+            triples.append(Triple(TripleType.GOTO, None, create_target_value(ctx.function_return_label), None))
         case _:
             assert False, f"Unhandled AST Type {ast.typ.name}"
     return triples, trip_val

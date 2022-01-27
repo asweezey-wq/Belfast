@@ -387,7 +387,7 @@ class TripleBlock:
         return f"Block {self.index}: {self.trips[0].index}-{self.trips[-1].index}"
 
 def does_triple_produce_data(triple: Triple):
-    return triple.typ in [TripleType.BINARY_OP, TripleType.UNARY_OP, TripleType.SYSCALL, TripleType.LOAD, TripleType.NOP_REF]
+    return triple.typ in [TripleType.BINARY_OP, TripleType.UNARY_OP, TripleType.SYSCALL, TripleType.LOAD, TripleType.NOP_REF, TripleType.CALL]
 
 def build_control_flow(trips: List[Triple], trip_ctx: TripleContext) -> List[TripleBlock]:
     label_references: Dict[Triple, List[Triple]] = {}
