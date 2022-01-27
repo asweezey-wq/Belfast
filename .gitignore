@@ -1,0 +1,12 @@
+tripstr/
+.vscode/
+__pycache__
+*.tripstr
+*.s
+*.c
+*.asm
+!print_d.asm
+prog
+*.bl
+!stdlib.bl
+belfastsyntaxhighlight/

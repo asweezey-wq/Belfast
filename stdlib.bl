@@ -1,0 +1,22 @@
+fun putd d do
+    var putd_buf = buffer(32)
+    store8(putd_buf+31, 0x0A)
+    var putd_cnt = 1;
+    if d != 0 then
+        var putd_is_neg = d < 0;
+        if putd_is_neg then d = d * -1; end
+
+        while d > 0 do
+            store8(putd_buf+(31-putd_cnt), 0x30 + (d % 10))
+            d = d / 10
+            putd_cnt = putd_cnt + 1
+        end
+
+        if putd_is_neg then store8(putd_buf+(31-putd_cnt), '-'); putd_cnt = putd_cnt + 1; end
+    else
+        putd_cnt = 2;
+        store8(putd_buf+30, 0x30)
+    end
+
+    syscall(0x2000004, 1, putd_buf + (32 - putd_cnt), putd_cnt+1)
+end
