@@ -7,6 +7,5 @@ __pycache__
 *.asm
 !print_d.asm
 prog
-*.bl
-!stdlib.bl
+prog.bl
 belfastsyntaxhighlight/

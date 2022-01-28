@@ -1,0 +1,44 @@
+const ITERS = 32;
+
+fun main do
+    var base_buf; base_buf = buffer(ITERS)
+    var next_buf; next_buf = buffer(ITERS)
+
+    var i; i = 0
+    while i < ITERS do store8(base_buf + i, 0); store8(next_buf + i, 0); i = i + 1; end
+
+    store8(base_buf + ITERS - 1, 1);
+    store8(next_buf + ITERS - 1, 1);
+
+    var print_buf; print_buf = buffer(ITERS + 1);
+    store8(print_buf + ITERS, '\n');
+
+    i = 0
+    var src_val;
+    while i < ITERS do
+        var j; j = 0;
+        while j < ITERS do
+            var temp; temp = print_buf + j
+            if load8(base_buf + j) then
+                store8(temp, '*')
+            else
+                store8(temp, ' ')
+            end
+            j = j + 1
+        end
+        syscall(0x2000004, 1, print_buf, ITERS + 1)
+        j = 1;
+        while j < ITERS - 1 do
+            var offs; offs = base_buf;
+            offs = base_buf + j;
+            src_val = (load8(offs - 1) << 2) + (load8(offs) << 1) + load8(offs + 1)
+            store8(next_buf + j, (110 >> src_val) & 1)
+            j = j + 1
+        end
+        var temp_ptr; temp_ptr = base_buf;
+        base_buf = next_buf;
+        next_buf = temp_ptr;
+        i = i + 1
+    end
+end
+

@@ -1,0 +1,22 @@
+include "stdlib.bl"
+
+const bufsize = 32
+
+fun main do
+    var fd = open("/Users/aidensweezey/Downloads/input-36.txt", O_RDONLY, 0)
+    if fd == 0 then
+        puts("ERROR opening file\n")
+        return 0
+    end
+    var cbuf = buffer(bufsize)
+    var bytes_read = read_until(fd, '\n', cbuf, bufsize)
+    var i = 0;
+    var cnt = 0;
+    while bytes_read > 0 do
+        var j = atoi(cbuf)
+        if i != 0 && j > i then cnt = cnt + 1; end
+        i = j
+        bytes_read = read_until(fd, '\n', cbuf, bufsize)
+    end
+    putd(cnt)
+end
