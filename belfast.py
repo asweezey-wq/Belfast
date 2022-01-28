@@ -569,12 +569,22 @@ def parse_tokens(tokens: List[Token]):
     while index < len(tokens):
         if tokens[index].typ == TokenType.EOF:
             break
-        if tokens[index].typ == TokenType.EOL:
+        if tokens[index].typ == TokenType.EOL or tokens[index].typ == TokenType.SEMICOLON:
             index += 1
             continue
-        s = parse_statement()
-        if s and s.typ != ASTType.NONE:
-            ast.append(s)
+        match tokens[index].typ:
+            case TokenType.KEYWORD:
+                match tokens[index].value:
+                    case Keyword.FUN:
+                        ast.append(parse_function_def())
+                    case Keyword.CONST:
+                        parse_const()
+                    case Keyword.INCLUDE:
+                        parse_include()
+                    case _:
+                        compiler_error(tokens[index].loc, f"Unexpected keyword {tokens[index].value.name}")
+            case _:
+                compiler_error(tokens[index].loc, f"Unexpected token {tokens[index].typ.name}")
     
     return ast, declared_vars, declared_funs, declared_consts
 
@@ -678,12 +688,17 @@ if __name__ == '__main__':
     
     trips, trip_ctx = triples_parse_program(ast)
 
+    if 'main' not in trip_ctx.functions:
+        compiler_error((filename, 1, 1), "No 'main' function found")
+
     asm = get_asm_header()
 
     x86_tripstr = ""
     prog_tripstr = ""
 
-    called_funs = get_call_graph(trips, trip_ctx.functions)
+    called_funs = list(get_call_graph(trip_ctx.functions['main'], trip_ctx.functions, visited_funs=('main',)))
+
+    called_funs.append('main')
 
     for f_name in called_funs:
         f_trips = trip_ctx.functions[f_name]
@@ -702,21 +717,6 @@ if __name__ == '__main__':
             asm += convert_function_to_asm(f_name, f_trips, trip_ctx, args.no_comments)
         prog_tripstr += "\n"
 
-    # with open('print_d.asm') as f:
-    #     asm += f.read() + '\n'
-    trip_ctx.ctx_name = "main"
-    prog_tripstr += "MAIN\n"
-    index_triples(trips)
-    trips = optimize_triples(trips, trip_ctx)
-    index_triples(trips)
-    for t in trips:
-        prog_tripstr += f"{print_triple(t)}\n"
-    trips = optimize_x86(trips, trip_ctx)
-    x86_tripstr += "MAIN\n"
-    x86_tripstr += output_x86_trips_to_str(trips, trip_ctx)
-    if not args.ir_only:
-        asm += convert_function_to_asm("main", trips, trip_ctx, args.no_comments)
-
     with open('prog.tripstr', 'w') as f:
         f.write(prog_tripstr)
     with open('prog_x86.tripstr', 'w') as f:
@@ -727,8 +727,3 @@ if __name__ == '__main__':
     if not args.ir_only:
         with open(args.output, 'w') as f_asm:
             f_asm.write(asm)
-
-    # print('\nEVALUATION:')
-    # eval_ctx = EvaluationContext()
-    # for a in ast:
-    #     evaluate_ast(a, eval_ctx)
