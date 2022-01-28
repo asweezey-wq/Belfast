@@ -45,3 +45,17 @@ fun puth h do
 
     syscall(0x2000004, 1, buf + (32 - cnt), cnt+1)
 end
+
+fun strlen s do
+    var cnt = 0;
+    var ch = load8(s)
+    while ch != 0 do
+        cnt = cnt + 1
+        ch = load8(s+cnt)
+    end
+    return cnt
+end
+
+fun puts s do
+    syscall(0x2000004, 1, s, strlen(s))
+end

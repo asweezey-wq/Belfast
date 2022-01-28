@@ -410,7 +410,10 @@ byte_registers = [
 ]
 
 ARG_REGISTERS = [6, 5, 4, 3, 9, 10]
-DATA_REGISTERS = [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16]
+DATA_REGISTERS = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16]
+
+CALLER_SAVED_REG = [1, 3, 4, 5, 6, 9, 10, 11, 12]
+CALLEE_SAVED_REG = [2, 7, 13, 14, 15, 16]
 
 def reg_str_for_size(index:int, size:int=64):
     if size == 64:

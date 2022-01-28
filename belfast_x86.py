@@ -116,11 +116,27 @@ def insert_lea(trips: List[Triple], trip_ctx: TripleContext):
 
     return len(to_remove) > 0
 
+def remove_redundant_moves(trips: List[Triple]):
+    index_triples(trips)
+    to_remove = []
+    for i,t in enumerate(trips):
+        if i == 0:
+            continue
+        if t.typ == TripleType.REGMOVE:
+            if trips[i-1].typ == TripleType.ASSIGN:
+                var_ref = create_var_ref_value(trips[i-1].l_val.value)
+                if triple_values_equal(t.r_val, var_ref) and triple_values_equal(t.l_val, trips[i-1].r_val):
+                    to_remove.append(t)
+
+    for t in to_remove:
+        trips.remove(t)
+
 def optimize_x86(trips: List[Triple], trip_ctx: TripleContext):
     if len(trips) == 0:
         return trips
     trips = insert_x86_regmoves(trips)
 
+    remove_redundant_moves(trips)
     insert_lea(trips, trip_ctx)
 
     while x86_block_analysis(trips, trip_ctx):
@@ -168,7 +184,18 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
 
     spilled_values = []
     memory_register_value = None
-    interf_graph = create_interference_graph(val_live)
+    interf_graph = create_interference_graph(trips, val_live)
+
+    for t in trips:
+        if t.typ == TripleType.CALL or t.typ == TripleType.SYSCALL:
+            tref = create_tref_value(t)
+            for v,l in val_live.items():
+                if not triple_values_equal(v, tref) and (t.index + 1) in l:
+                    if tref not in interf_graph:
+                        interf_graph[tref] = set()
+                    interf_graph[tref].add(v)
+                    interf_graph[v].add(tref)
+
     precolors = {}
     coalesces_performed = {}
     values_coalesced = {}
@@ -180,25 +207,26 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
             return_var = return_trips[0].l_val.value
     elif len(return_trips) > 1:
         assert False
+    reg_order = DATA_REGISTERS if trip_ctx.ctx_name == 'main' else CALLER_SAVED_REG + CALLEE_SAVED_REG
 
     for v in interf_graph:
         match v.typ:
             case TripleValueType.REGISTER:
-                precolors[v] = DATA_REGISTERS.index(v.value)
+                precolors[v] = reg_order.index(v.value)
             case TripleValueType.VAR_REF:
                 if return_var and v.value == return_trips[0].l_val.value:
-                    precolors[v] = DATA_REGISTERS.index(RAX_INDEX)
+                    precolors[v] = reg_order.index(RAX_INDEX)
             case TripleValueType.TRIPLE_REF:
                 t = v.value
                 match t.typ:
                     case TripleType.BINARY_OP:
                         match t.op:
                             case Operator.MODULUS:
-                                precolors[v] = DATA_REGISTERS.index(RDX_INDEX)
+                                precolors[v] = reg_order.index(RDX_INDEX)
                             case Operator.DIVIDE | Operator.MULTIPLY:
-                                precolors[v] = DATA_REGISTERS.index(RAX_INDEX)
+                                precolors[v] = reg_order.index(RAX_INDEX)
                     case TripleType.SYSCALL | TripleType.CALL:
-                        precolors[v] = DATA_REGISTERS.index(RAX_INDEX)
+                        precolors[v] = reg_order.index(RAX_INDEX)
 
     while True:
         coalesce_nodes = {}
@@ -338,8 +366,8 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
     # print(spilled_values)
 
     if memory_register_value is not None:
-        print(f"MEMORY SPILL REG: {reg_str_for_size(DATA_REGISTERS[register_alloc[memory_register_value]])}")
-        trip_ctx.memory_spill_register = DATA_REGISTERS[register_alloc[memory_register_value]]
+        print(f"MEMORY SPILL REG: {reg_str_for_size(reg_order[register_alloc[memory_register_value]])}")
+        trip_ctx.memory_spill_register = reg_order[register_alloc[memory_register_value]]
         del register_alloc[memory_register_value]
 
     coal_nodes = list(coalesces_performed.keys())
@@ -360,7 +388,7 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
     # print()
     # print('\n'.join(map(lambda x: f"{x[0]}: {reg_str_for_size(DATA_REGISTERS[x[1]])}", sorted(register_alloc.items(), key=lambda x: (x[0].typ.value, x[0].value.index if x[0].typ == TripleValueType.TRIPLE_REF else x[1])))))
 
-    trip_ctx.register_alloc = {k:DATA_REGISTERS[v] for k,v in register_alloc.items()}
+    trip_ctx.register_alloc = {k:reg_order[v] for k,v in register_alloc.items()}
     trip_ctx.val_liveness = val_live
     trip_ctx.spilled_values = {v:(i+1) for i,v in enumerate(spilled_values)}
 
@@ -495,6 +523,11 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
     def write_asm(s):
         nonlocal asm
         asm += f"    {s}\n"
+
+    if fun_name != 'main':
+        for i in CALLEE_SAVED_REG:
+            if i in trip_ctx.register_alloc.values():
+                write_asm(f"push {reg_str_for_size(i)}")
 
     stack_space_alloc = 0
 
@@ -690,13 +723,8 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     pass
                 case TripleType.CALL:
                     # TODO: Optimize saves/loads
-                    save_regs = list(filter(lambda x: x in DATA_REGISTERS and x != RAX_INDEX, trip_ctx.get_all_used_registers(t.index+1)))
-                    for r in save_regs:
-                        write_asm(f"push {reg_str_for_size(r)}")
-                    assert lv is not None and lv.typ == TripleValueType.FUN_LABEL
+                    assert lv is not None and lv.typ == TripleValueType.FUN_LABEL                    
                     write_asm(f"call {triple_value_str(lv)}")
-                    for r in reversed(save_regs):
-                        write_asm(f"pop {reg_str_for_size(r)}")
                 case TripleType.RETURN:
                     l_reg = trip_ctx.get_allocated_register(t.l_val, t.index)
                     if l_reg is None or l_reg != RAX_INDEX:
@@ -713,6 +741,12 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
 
     if stack_space_alloc > 0:
         write_asm(f"add rsp, {stack_space_alloc}")
+    
+    if fun_name != 'main':
+        for i in CALLEE_SAVED_REG:
+            if i in trip_ctx.register_alloc.values():
+                write_asm(f"pop {reg_str_for_size(i)}")
+
     asm += "    ret\n\n"
 
     return asm
@@ -720,13 +754,14 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
 def get_asm_header():
     return HEADER
 
-def get_asm_footer(trip_ctx: TripleContext):
+def get_asm_footer(trip_ctx: TripleContext, called_funs: Set[str]):
     did_segment = False
     asm = ""
 
     all_buffers = dict(trip_ctx.buffers)
     all_strings = dict(trip_ctx.strings)
-    for c in trip_ctx.function_ctx.values():
+    for f in called_funs:
+        c = trip_ctx.function_ctx[f]
         all_buffers.update(c.buffers)
         all_strings.update(c.strings)
 

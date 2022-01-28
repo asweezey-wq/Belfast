@@ -18,7 +18,6 @@ class TripleContext:
         self.active_continue_label = None
         self.function_return_label = None
         self.function_return_var = None
-        self.did_function_return = False
         self.ctx_name = ''
         self.has_generated_print_code = False
 
@@ -33,10 +32,21 @@ class TripleContext:
         self.function_ctx[name] = trip_ctx
 
     def create_subctx(self):
-        return self
-        # tctx = TripleContext()
-        # tctx.declared_vars.update(self.declared_vars)
-        # return tctx
+        tctx = TripleContext()
+        tctx.buffers.update(self.buffers)
+        tctx.strings.update(self.strings)
+        tctx.string_offs = self.string_offs + len(self.strings)
+        tctx.buffer_offs = self.buffer_offs + len(self.buffers)
+        tctx.declared_vars.update(self.declared_vars)
+        tctx.active_continue_label = self.active_continue_label
+        tctx.active_break_label = self.active_break_label
+        tctx.function_return_label = self.function_return_label
+        tctx.function_return_var = self.function_return_var
+        return tctx
+
+    def return_from_subctx(self, subctx: 'TripleContext'):
+        self.buffers.update(subctx.buffers)
+        self.strings.update(subctx.strings)
 
     def allocate_buffer(self, amt: int):
         name = f'_BUF{len(self.buffers) + self.buffer_offs}'
@@ -99,6 +109,21 @@ def triples_parse_program(ast_list: List[ASTNode_Base]):
     trips.append(ret_label)
     trips.append(Triple(TripleType.RETURN, None, create_var_ref_value(ctx.function_return_var), None))
     return trips, ctx
+
+def get_call_graph(trips: List[Triple], funs: Dict[str, List[Triple]], visited_funs=()):
+    vis = set(visited_funs)
+    new_funs = []
+    for t in trips:
+        if t.typ == TripleType.CALL:
+            assert t.l_val.value in funs
+            if t.l_val.value not in vis:
+                new_funs.append(t.l_val.value)
+                vis.add(t.l_val.value)
+    ret_funs = set()
+    for t in new_funs:
+        ret_funs.update(get_call_graph(funs[t], funs, tuple(vis)))
+        ret_funs.add(t)
+    return ret_funs
 
 def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
     triples = []
@@ -176,7 +201,9 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             triples.extend(trips)
             triples.append(Triple(TripleType.ASSIGN, None, create_var_assign_value(ast.ident_str), trip_val))
         case ASTType.VAR_REF:
-            assert ctx.variable_exists(ast.ident_str), "This may be a bug in the parsing step"
+            if not ctx.variable_exists(ast.ident_str):
+                # TODO: Move this to parsing step?
+                compiler_error(ast.value.loc, f"Use of undeclared variable {ast.ident_str}")
             trip_val = create_var_ref_value(ast.ident_str)
         case ASTType.BUFFER_ALLOC:
             trip_val = TripleValue(TripleValueType.BUFFER_REF, ctx.allocate_buffer(ast.num_value))
@@ -216,6 +243,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 triples.append(end_goto_triple)
             else:
                 triples.append(end_label_triple)
+            ctx.return_from_subctx(scoped_ctx)
         case ASTType.WHILE:
             cond_trips, cond_val = ast_to_triples(ast.cond_ast, ctx)
             scoped_ctx = ctx.create_subctx()
@@ -231,6 +259,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 triples.extend(a_trips)
             triples.append(Triple(TripleType.GOTO, op=None, l_val=create_target_value(cond_eval_label), r_val=None))
             triples.append(end_label_triple)
+            ctx.return_from_subctx(scoped_ctx)
         case ASTType.BREAK:
             if ctx.active_break_label:
                 triples.append(Triple(TripleType.GOTO, op=None, l_val=create_target_value(ctx.active_break_label), r_val=None))
@@ -245,12 +274,15 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             syscall_num_val = ast.args[0]
             s_trips, s_val = ast_to_triples(syscall_num_val, ctx)
             triples.extend(s_trips)
-            reg_index = 0
+            assert s_val.typ == TripleValueType.CONSTANT
+            # TODO: Stop using flags for values! Interferences with TF_REMOVE
+            arg_vals = []
             for a in ast.args[1:]:
                 a_trips, a_val = ast_to_triples(a, ctx)
                 triples.extend(a_trips)
-                triples.append(Triple(TripleType.ARG, op=None, l_val=a_val, r_val=None, flags=reg_index))
-                reg_index += 1
+                arg_vals.append(a_val)
+            for i,a in enumerate(arg_vals):
+                triples.append(Triple(TripleType.ARG, None, a, None, flags=i))
             triples.append(Triple(TripleType.SYSCALL, op=None, l_val=s_val, r_val=None, flags=len(ast.args)-1))
             trip_val = create_tref_value(triples[-1])
         case ASTType.LOAD:
@@ -289,10 +321,13 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             ctx.declare_function(fun_name, fun_triples, scoped_ctx)
         case ASTType.FUN_CALL:
             fun_name = ast.fun_name
+            arg_vals = []
             for i in range(len(ast.args)):
                 arg_trips, arg_val = ast_to_triples(ast.args[i], ctx)
                 triples.extend(arg_trips)
-                triples.append(Triple(TripleType.ARG, None, arg_val, None, flags=i))
+                arg_vals.append(arg_val)
+            for i,a in enumerate(arg_vals):
+                triples.append(Triple(TripleType.ARG, None, a, None, flags=i))
             triples.append(Triple(TripleType.CALL, None, TripleValue(TripleValueType.FUN_LABEL, fun_name), None, flags=len(ast.args)))
             trip_val = create_tref_value(triples[-1])
         case ASTType.RETURN:

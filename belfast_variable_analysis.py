@@ -200,16 +200,31 @@ def evaluate_liveness(blocks: List[TripleBlock]):
 
     return val_liveness, use_count
 
-def create_interference_graph(val_liveness: Dict[TripleValue, Set[int]]) -> Dict[TripleValue, List[TripleValue]]:
+def create_interference_graph(trips: List[Triple], val_liveness: Dict[TripleValue, Set[int]]) -> Dict[TripleValue, List[TripleValue]]:
     interf_graph: Dict[Any, Set[Any]] = {}
-    for v, live_nums in val_liveness.items():
-        interf_graph[v] = set()
-        for v2,ln2 in val_liveness.items():
-            if v2 == v:
-                continue
-            inter = len(live_nums.intersection(ln2))
-            if inter > 0:
-                interf_graph[v].add(v2)
+    # for v, live_nums in val_liveness.items():
+    #     interf_graph[v] = set()
+    #     for v2,ln2 in val_liveness.items():
+    #         if v2 == v:
+    #             continue
+    #         inter = len(live_nums.intersection(ln2))
+    #         if inter > 0:
+    #             interf_graph[v].add(v2)
+
+    for t in trips:
+        d_l = get_defines(t)
+        live_after = [v for v,l in val_liveness.items() if (t.index + 1) in l]
+        for d in d_l:
+            if d not in interf_graph:
+                interf_graph[d] = set()
+            for v in live_after:
+                if v in d_l:
+                    continue
+                if v not in interf_graph:
+                    interf_graph[v] = set()
+                interf_graph[d].add(v)
+                interf_graph[v].add(d)
+
     return interf_graph
 
 def does_value_need_color(tv: TripleValue):
@@ -221,13 +236,13 @@ def get_defines(triple: Triple):
             return (create_var_ref_value(triple.l_val.value),)
         case TripleType.REGMOVE:
             return (triple.l_val,)
-        case TripleType.BINARY_OP | TripleType.UNARY_OP | TripleType.NOP_REF:
+        case TripleType.BINARY_OP | TripleType.UNARY_OP | TripleType.NOP_REF | TripleType.LOAD:
             if (triple.flags & TF_BOOL_FORWARDED) > 0:
                 # Bool forwarded values are not stored
                 return ()
             return (create_tref_value(triple),)
         case TripleType.CALL | TripleType.SYSCALL:
-            return (create_tref_value(triple),)
+            return [create_tref_value(triple)] + [create_register_value(i) for i in CALLER_SAVED_REG]
         case TripleType.ARG:
             return (create_register_value(ARG_REGISTERS[triple.flags]),)
     return ()
@@ -251,8 +266,10 @@ def get_uses(triple: Triple, colored_only=True):
                 return ()
             if not colored_only or does_value_need_color(triple.l_val):
                 vals = [triple.l_val,]
-        case TripleType.SYSCALL:
+        case TripleType.SYSCALL | TripleType.CALL:
             vals = [create_register_value(v) for v in ARG_REGISTERS[:triple.flags]]
+        case TripleType.RETURN:
+            vals = [create_register_value(v) for v in CALLEE_SAVED_REG]
     new_vals = []
     for v in vals:
         if v.typ == TripleValueType.ADDRESS_COMPUTE:

@@ -337,6 +337,11 @@ def parse_tokens(tokens: List[Token]):
     def parse_function_def():
         nonlocal index, defining_function, defining_fun_body, defining_function_args
         tok = expect_keyword(Keyword.FUN)
+        if len(declared_vars):
+            compiler_error(tok.loc, "Variables declared outside of function")
+        
+        declared_vars.clear()
+
         if defining_function:
             compiler_error(tok.loc, "Nested functions are not supported")
         ident_tok = expect_token(TokenType.IDENTIFIER)
@@ -375,6 +380,8 @@ def parse_tokens(tokens: List[Token]):
         declared_funs[ident_tok.value] = fundef
         defining_fun_body = []
         defining_function_args = []
+
+        declared_vars.clear()
 
         return fundef
 
@@ -673,7 +680,10 @@ if __name__ == '__main__':
     x86_tripstr = ""
     prog_tripstr = ""
 
-    for f_name, f_trips in trip_ctx.functions.items():
+    called_funs = get_call_graph(trips, trip_ctx.functions)
+
+    for f_name in called_funs:
+        f_trips = trip_ctx.functions[f_name]
         prog_tripstr += f"FUNCTION {f_name}\n"
         index_triples(f_trips)
         trip_ctx.ctx_name = f_name
@@ -709,7 +719,7 @@ if __name__ == '__main__':
     with open('prog_x86.tripstr', 'w') as f:
         f.write(x86_tripstr)
 
-    asm += get_asm_footer(trip_ctx)
+    asm += get_asm_footer(trip_ctx, called_funs)
     
     if not args.ir_only:
         with open(args.output, 'w') as f_asm:
