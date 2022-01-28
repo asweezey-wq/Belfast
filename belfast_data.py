@@ -352,8 +352,8 @@ class Triple:
     r_val:Optional[TripleValue]
     index:int = -1
     flags:int = 0
-    last_use:int = 0
     size:int = 64
+    data:int = 0
 
     def __hash__(self) -> int:
         return self.index

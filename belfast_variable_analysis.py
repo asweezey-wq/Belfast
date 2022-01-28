@@ -242,9 +242,9 @@ def get_defines(triple: Triple):
                 return ()
             return (create_tref_value(triple),)
         case TripleType.CALL | TripleType.SYSCALL:
-            return [create_tref_value(triple)] + [create_register_value(i) for i in CALLER_SAVED_REG]
+            return [create_tref_value(triple),] + [create_register_value(i) for i in CALLER_SAVED_REG]
         case TripleType.ARG:
-            return (create_register_value(ARG_REGISTERS[triple.flags]),)
+            return (create_register_value(ARG_REGISTERS[triple.data]),)
     return ()
 
 def get_uses(triple: Triple, colored_only=True):
@@ -267,7 +267,7 @@ def get_uses(triple: Triple, colored_only=True):
             if not colored_only or does_value_need_color(triple.l_val):
                 vals = [triple.l_val,]
         case TripleType.SYSCALL | TripleType.CALL:
-            vals = [create_register_value(v) for v in ARG_REGISTERS[:triple.flags]]
+            vals = [create_register_value(v) for v in ARG_REGISTERS[:triple.data]]
         case TripleType.RETURN:
             vals = [create_register_value(v) for v in CALLEE_SAVED_REG]
     new_vals = []

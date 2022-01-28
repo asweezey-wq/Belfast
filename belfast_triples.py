@@ -275,15 +275,14 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             s_trips, s_val = ast_to_triples(syscall_num_val, ctx)
             triples.extend(s_trips)
             assert s_val.typ == TripleValueType.CONSTANT
-            # TODO: Stop using flags for values! Interferences with TF_REMOVE
             arg_vals = []
             for a in ast.args[1:]:
                 a_trips, a_val = ast_to_triples(a, ctx)
                 triples.extend(a_trips)
                 arg_vals.append(a_val)
             for i,a in enumerate(arg_vals):
-                triples.append(Triple(TripleType.ARG, None, a, None, flags=i))
-            triples.append(Triple(TripleType.SYSCALL, op=None, l_val=s_val, r_val=None, flags=len(ast.args)-1))
+                triples.append(Triple(TripleType.ARG, None, a, None, data=i))
+            triples.append(Triple(TripleType.SYSCALL, op=None, l_val=s_val, r_val=None, data=len(ast.args)-1))
             trip_val = create_tref_value(triples[-1])
         case ASTType.LOAD:
             ptr_exp_trips, ptr_exp_val = ast_to_triples(ast.ptr_exp, ctx)
@@ -309,7 +308,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             scoped_ctx.function_return_label = end_label
             scoped_ctx.function_return_var = f"${fun_name}_return"
             for i,a in enumerate(args):
-                fun_triples.append(Triple(TripleType.FUN_ARG_IN, None, create_var_assign_value(a), None, flags=i))
+                fun_triples.append(Triple(TripleType.FUN_ARG_IN, None, create_var_assign_value(a), None, data=i))
             for a in ast.body:
                 a_trips, _ = ast_to_triples(a, scoped_ctx)
                 fun_triples.extend(a_trips)
@@ -327,8 +326,8 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 triples.extend(arg_trips)
                 arg_vals.append(arg_val)
             for i,a in enumerate(arg_vals):
-                triples.append(Triple(TripleType.ARG, None, a, None, flags=i))
-            triples.append(Triple(TripleType.CALL, None, TripleValue(TripleValueType.FUN_LABEL, fun_name), None, flags=len(ast.args)))
+                triples.append(Triple(TripleType.ARG, None, a, None, data=i))
+            triples.append(Triple(TripleType.CALL, None, TripleValue(TripleValueType.FUN_LABEL, fun_name), None, data=len(ast.args)))
             trip_val = create_tref_value(triples[-1])
         case ASTType.RETURN:
             assert ctx.function_return_label is not None and ctx.function_return_var is not None

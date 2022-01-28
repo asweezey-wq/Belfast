@@ -462,7 +462,7 @@ def evaluate_block_value_usage(b: TripleBlock) -> Set[TripleValue]:
             b.vals_assigned[t_ref] = t
             vals_assigned.add(t_ref)
         if t.typ == TripleType.SYSCALL:
-            for r in range(t.flags):
+            for r in range(t.data):
                 reg = ARG_REGISTERS[r]
                 val = create_register_value(reg)
                 vals_used.add(val)
@@ -473,7 +473,7 @@ def evaluate_block_value_usage(b: TripleBlock) -> Set[TripleValue]:
                 b.vals_assigned[rax_ref] = t
             vals_assigned.add(rax_ref)
         elif t.typ == TripleType.FUN_ARG_IN:
-            reg = ARG_REGISTERS[t.flags]
+            reg = ARG_REGISTERS[t.data]
             val = create_register_value(reg)
             vals_assigned.add(val)
             if val not in b.vals_assigned:
@@ -534,12 +534,6 @@ def annotate_triples(trips: List[Triple], trip_ctx: TripleContext):
                         trips[i - 1].flags |= TF_BOOL_FORWARDED
         if t.typ == TripleType.FUN_ARG_IN or t.typ == TripleType.SYSCALL:
             continue
-        if t in triple_references:
-            if len(triple_references[t]) == 1:
-                # If this value is only used once, it is ephemeral
-                t.flags |= TF_EPHEMERAL
-            if len(triple_references[t]) > 0:
-                t.last_use = max([r.index for r in triple_references[t]])
 
 def get_reference_data(trips: List[Triple], trip_ctx: TripleContext):
     triple_references: Dict[Triple, List[Triple]] = {}
@@ -679,10 +673,10 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                         if last_match is not None:
                             has_changed = False
                             if last_match.l_val and last_match.l_val.typ == TripleValueType.VAR_REF:
-                                if find_assign_between(last_match.index + 1, tref.index, last_match.l_val.value) is not None:
+                                if find_assign_between(last_match, tref, last_match.l_val.value) is not None:
                                     has_changed = True
                             if last_match.r_val and last_match.r_val.typ == TripleValueType.VAR_REF:
-                                if find_assign_between(last_match.index + 1, tref.index, last_match.r_val.value) is not None:
+                                if find_assign_between(last_match, tref, last_match.r_val.value) is not None:
                                     has_changed = True
                             if not has_changed:
                                 tv.value = last_match
@@ -724,7 +718,7 @@ def output_triple_delta_to_file(d, filename):
 
 def shallowcopy_trips(trips: List[Triple], triple_references, label_references):
     def shallowcopy_triple(t: Triple):
-        new_t = Triple(t.typ, t.op, None, None, t.index, flags=t.flags, size=t.size)
+        new_t = Triple(t.typ, t.op, None, None, t.index, flags=t.flags, data=t.data, size=t.size)
         if t.l_val:
             new_t.l_val = TripleValue(t.l_val.typ, t.l_val.value)
         if t.r_val:

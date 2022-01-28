@@ -18,7 +18,7 @@ fun putd d do
         store8(putd_buf+30, 0x30)
     end
 
-    syscall(0x2000004, 1, putd_buf + (32 - putd_cnt), putd_cnt+1)
+    syscall(0x2000004, 1, putd_buf + (32 - putd_cnt), putd_cnt)
 end
 
 fun puth h do
@@ -76,6 +76,8 @@ const SYSCALL_WRITE = 0x2000004;
 const SYSCALL_OPEN = 0x2000005;
 const SYSCALL_CLOSE = 0x2000006;
 
+const SYSCALL_LSEEK = 0x20000C7;
+
 const O_RDONLY = 0x0000;
 const O_WRONLY = 0x0001;
 const O_RDWR   = 0x0002;
@@ -117,6 +119,18 @@ fun write fd buf num_bytes do
     return syscall(SYSCALL_WRITE, fd, buf, num_bytes)
 end
 
+const SEEK_SET = 0;
+const SEEK_CUR = 1;
+const SEEK_END = 2;
+
+fun seek fd offs whence do
+    return syscall(SYSCALL_LSEEK, fd, offs, whence)
+end
+
+fun tell fd do
+    return syscall(SYSCALL_LSEEK, fd, 0, SEEK_CUR)
+end
+
 
 // given a, a ptr to a null-terminated string, we return the unsigned integer representation of that string
 fun atoi a do
@@ -130,4 +144,19 @@ fun atoi a do
         ch = load8(a+cnt)
     end
     return i
+end
+
+fun read_until fd delim buf buflen do
+    var b_read = read(fd, buf, buflen)
+    var i = 0
+    while i < b_read do
+        if load8(buf+i) == delim then
+            store8(buf+i, 0)
+            //putd(i - b_read)
+            seek(fd, i - b_read + 1, SEEK_CUR)
+            return i
+        end
+        i = i + 1
+    end
+    return b_read
 end
