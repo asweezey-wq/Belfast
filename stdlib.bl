@@ -56,6 +56,63 @@ fun strlen s do
     return cnt
 end
 
+const STDOUT_FILENO = 1;
+const STDIN_FILENO = 1;
+const STDERR_FILENO = 2;
+
 fun puts s do
-    syscall(0x2000004, 1, s, strlen(s))
+    syscall(0x2000004, STDOUT_FILENO, s, strlen(s))
+end
+
+fun putc c do
+    var cbuf = buffer(1)
+    store8(cbuf, c)
+    syscall(0x2000004, STDOUT_FILENO, cbuf, 1)
+end
+
+const SYSCALL_READ = 0x2000003;
+const SYSCALL_WRITE = 0x2000004;
+
+const SYSCALL_OPEN = 0x2000005;
+const SYSCALL_CLOSE = 0x2000006;
+
+const O_RDONLY = 0x0000;
+const O_WRONLY = 0x0001;
+const O_RDWR   = 0x0002;
+
+const O_APPEND = 0x0008;
+
+const O_CREAT = 0x0200;
+const O_TRUNC = 0x0400;
+const O_EXCL  = 0x0800;
+
+const S_IRWXU = 448; // 700 octal | RWX mask for owner
+const S_IRUSR = 256; // 400 octal | R for owner
+const S_IWUSR = 128; // 200 octal | W for owner
+const S_IXUSR = 64;  // 100 octal | X for owner
+
+const S_IRWXG = 56; // 70 octal   | RWX mask for group
+const S_IRGRP = 32; // 40 octal   | R for group
+const S_IWGRP = 16; // 20 octal   | W for group
+const S_IXGRP = 8;  // 10 octal   | X for group
+
+const S_IRWXO = 7; // 70 octal    | RWX mask for other
+const S_IROTH = 4; // 40 octal    | R for other
+const S_IWOTH = 2; // 20 octal    | W for other
+const S_IXOTH = 1; // 10 octal    | X for other
+
+fun open filepath mode flags do
+    return syscall(SYSCALL_OPEN, filepath, mode, flags)
+end
+
+fun close fd do
+    return syscall(SYSCALL_CLOSE, fd)
+end
+
+fun read fd buf num_bytes do
+    return syscall(SYSCALL_READ, fd, buf, num_bytes)
+end
+
+fun write fd buf num_bytes do
+    return syscall(SYSCALL_WRITE, fd, buf, num_bytes)
 end

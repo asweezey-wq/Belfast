@@ -25,6 +25,8 @@ def tokenize_string(filepath:str, input_string: str):
     for l in input_string.splitlines():
         loc = (filepath, line_num, 1)
         if not l.startswith('//'):
+            if '//' in l:
+                l = l.split('//')[0]
             for m in lr.finditer(l):
                 t = m.groups()
                 loc = (filepath, line_num, m.start() + 1)
@@ -508,10 +510,11 @@ def parse_tokens(tokens: List[Token]):
     def parse_include():
         tok = expect_keyword(Keyword.INCLUDE)
         file_tok = expect_token(TokenType.STRING)
-        inc_a, inc_vars, inc_funs = file_to_ast(file_tok.value)
+        inc_a, inc_vars, inc_funs, inc_consts = file_to_ast(file_tok.value)
         ast.extend(inc_a)
         declared_vars.update(inc_vars)
         declared_funs.update(inc_funs)
+        declared_consts.update(inc_consts)
 
     def parse_statement():
         tok = tokens[index]
@@ -573,7 +576,7 @@ def parse_tokens(tokens: List[Token]):
         if s and s.typ != ASTType.NONE:
             ast.append(s)
     
-    return ast, declared_vars, declared_funs
+    return ast, declared_vars, declared_funs, declared_consts
 
 def print_ast(ast:ASTNode_Base, indent=0):
     indent_str = ' | ' * indent
