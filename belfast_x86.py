@@ -14,7 +14,7 @@ def get_forced_output_registers(triple: Triple):
     match triple.typ:
         case TripleType.BINARY_OP:
             match triple.op:
-                case Operator.DIVIDE:
+                case Operator.DIVIDE | Operator.MULTIPLY:
                     return (RAX_INDEX, (RDX_INDEX, ))
                 case Operator.MODULUS:
                     return (RDX_INDEX, (RAX_INDEX, ))
@@ -29,7 +29,7 @@ def get_forced_input_registers(triple: Triple):
     match triple.typ:
         case TripleType.BINARY_OP:
             match triple.op:
-                case Operator.DIVIDE | Operator.MODULUS:
+                case Operator.DIVIDE | Operator.MODULUS | Operator.MULTIPLY:
                     return (RAX_INDEX, 0)
                 case Operator.SHIFT_LEFT | Operator.SHIFT_RIGHT:
                     if triple.r_val.typ != TripleValueType.CONSTANT:
@@ -41,7 +41,7 @@ def insert_x86_regmoves(trips: List[Triple]):
     new_trips: List[Triple] = []
     for t in trips:
         if t.typ == TripleType.BINARY_OP:
-            if t.op == Operator.DIVIDE or t.op == Operator.MODULUS:
+            if t.op == Operator.DIVIDE or t.op == Operator.MODULUS or t.op == Operator.MULTIPLY:
                 reg_val = TripleValue(TripleValueType.REGISTER, RAX_INDEX)
                 new_trips.append(Triple(TripleType.REGMOVE, None, reg_val, t.l_val))
                 t.l_val = reg_val
@@ -50,7 +50,7 @@ def insert_x86_regmoves(trips: List[Triple]):
                     t.r_val = TripleValue(TripleValueType.TRIPLE_REF, new_trips[-1])
                 new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RDX_INDEX), TripleValue(TripleValueType.CONSTANT, 0)))
                 new_trips.append(t)
-                if t.op == Operator.DIVIDE:
+                if t.op == Operator.DIVIDE or t.op == Operator.MULTIPLY:
                     new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RDX_INDEX), TripleValue(TripleValueType.UNKNOWN, 0)))
                 elif t.op == Operator.MODULUS:
                     new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RAX_INDEX), TripleValue(TripleValueType.UNKNOWN, 0)))
@@ -616,8 +616,12 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                         case Operator.SHIFT_LEFT | Operator.SHIFT_RIGHT:
                             assert rv.typ == TripleValueType.CONSTANT or (rv.typ == TripleValueType.REGISTER and rv.value == RCX_INDEX), "Expected RHS to be constant or RCX"
                             write_asm(f"{'shl' if t.op == Operator.SHIFT_LEFT else 'shr'} {triple_value_str(lv)}, {triple_value_str(rv, size=8)}")
+                        case Operator.MULTIPLY:
+                            assert t_reg is not None and t_reg == RAX_INDEX and lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected mul to read and write from/to RAX"
+                            assert rv.typ == TripleValueType.REGISTER, "Expected div RHS to be in a register"
+                            write_asm(f"imul {triple_value_str(rv)}")
                         case Operator.DIVIDE:
-                            assert t_reg is not None and t_reg == RAX_INDEX and lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected div to read and write from RAX"
+                            assert t_reg is not None and t_reg == RAX_INDEX and lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected div to read and write from/to RAX"
                             assert rv.typ == TripleValueType.REGISTER, "Expected div RHS to be in a register"
                             write_asm(f"idiv {triple_value_str(rv)}")
                         case Operator.MODULUS:

@@ -116,3 +116,18 @@ end
 fun write fd buf num_bytes do
     return syscall(SYSCALL_WRITE, fd, buf, num_bytes)
 end
+
+
+// given a, a ptr to a null-terminated string, we return the unsigned integer representation of that string
+fun atoi a do
+    var cnt = 0;
+    var i = 0;
+    var ch = load8(a)
+    while ch != 0 do
+        i = i * 10
+        i = i + (ch - '0')
+        cnt = cnt + 1
+        ch = load8(a+cnt)
+    end
+    return i
+end
