@@ -289,6 +289,7 @@ class TripleValueType(Enum):
     CONSTANT = auto()
     VAR_REF = auto()
     BUFFER_REF = auto()
+    LOCAL_BUFFER_REF = auto()
     STRING_REF = auto()
     TRIPLE_REF = auto()
     TRIPLE_TARGET = auto() # for use as a triple jump target
@@ -324,6 +325,8 @@ def trip_val_to_str(tv:TripleValue, as_hex=False):
                 return str(tv.value)
         case TripleValueType.VAR_REF | TripleValueType.VAR_ASSIGN | TripleValueType.BUFFER_REF | TripleValueType.STRING_REF:
             return str(tv.value)
+        case TripleValueType.LOCAL_BUFFER_REF:
+            return f"buffer[{tv.value.size}]"
         case TripleValueType.TRIPLE_REF | TripleValueType.TRIPLE_TARGET:
             assert isinstance(tv.value, Triple), "Expected Triple Ref to reference Triple value"
             return f"({tv.value.index})"

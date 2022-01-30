@@ -704,17 +704,18 @@ if __name__ == '__main__':
         f_trips = trip_ctx.functions[f_name]
         prog_tripstr += f"FUNCTION {f_name}\n"
         index_triples(f_trips)
-        trip_ctx.ctx_name = f_name
-        f_trips = optimize_triples(f_trips, trip_ctx)
+        fun_ctx = trip_ctx.function_ctx[f_name]
+        fun_ctx.ctx_name = f_name
+        f_trips = optimize_triples(f_trips, fun_ctx)
         index_triples(f_trips)
         for t in f_trips:
             prog_tripstr += f"{print_triple(t)}\n"
-        f_trips = optimize_x86(f_trips, trip_ctx)
+        f_trips = optimize_x86(f_trips, fun_ctx)
         x86_tripstr += f"FUNCTION {f_name}\n"
-        x86_tripstr += output_x86_trips_to_str(f_trips, trip_ctx)
+        x86_tripstr += output_x86_trips_to_str(f_trips, fun_ctx)
         x86_tripstr += "\n"
         if not args.ir_only:
-            asm += convert_function_to_asm(f_name, f_trips, trip_ctx, args.no_comments)
+            asm += convert_function_to_asm(f_name, f_trips, fun_ctx, args.no_comments)
         prog_tripstr += "\n"
 
     with open('prog.tripstr', 'w') as f:

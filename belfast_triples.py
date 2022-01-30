@@ -1,5 +1,11 @@
 from belfast_data import *
 
+class Buffer:
+
+    def __init__(self, size) -> None:
+        self.size = size
+        self.rsp_offset = None
+
 class TripleContext:
 
     def __init__(self):
@@ -7,6 +13,7 @@ class TripleContext:
         self.functions = {}
         self.function_ctx = {}
         self.buffers: Dict[str, int] = {}
+        self.local_buffers: List[Buffer] = []
         self.buffer_offs = 0
         self.string_offs = 0
         self.strings: Dict[str, str] = {}
@@ -53,6 +60,11 @@ class TripleContext:
         self.buffers[name] = amt
         return name
 
+    def allocate_local_buffer(self, amt: int):
+        buf = Buffer(amt)
+        self.local_buffers.append(buf)
+        return buf
+
     def allocate_string(self, string: str):
         if string not in self.strings:
             self.strings[string] = f"_S{len(self.strings) + self.string_offs}"
@@ -66,7 +78,7 @@ class TripleContext:
     def get_all_used_registers(self, index:int):
         reg = set()
         for v,s in self.val_liveness.items():
-            if index in s:
+            if index in s and v in self.register_alloc:
                 reg.add(self.register_alloc[v])
         return reg
 
@@ -206,7 +218,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 compiler_error(ast.value.loc, f"Use of undeclared variable {ast.ident_str}")
             trip_val = create_var_ref_value(ast.ident_str)
         case ASTType.BUFFER_ALLOC:
-            trip_val = TripleValue(TripleValueType.BUFFER_REF, ctx.allocate_buffer(ast.num_value))
+            trip_val = TripleValue(TripleValueType.LOCAL_BUFFER_REF, ctx.allocate_local_buffer(ast.num_value))
         case ASTType.ASSIGN:
             l_trips, l_trip_val = ast_to_triples(ast.l_ast, ctx)
             assert len(l_trips) == 0, "Multiple triples on Assign LHS not supported"
