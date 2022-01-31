@@ -764,15 +764,16 @@ if __name__ == '__main__':
         with open(args.output, 'w') as f_asm:
             f_asm.write(asm)
 
-    if args.stat in ['1', '2']:
-        for f_name, stat in stats.items():
-            print(f"[STAT] [{f_name}]: Score: {evaluate_stat_score(stat)}")
-            print(f"[STAT] [{f_name}]: Registers Used: {len(stat.registers_used)}")
-            if args.stat in ['2',]:
-                print('\n'.join([f"               {k}: {v}" for k,v in asdict(stat).items()]))
-    else:
-        print("ERROR: stat argument should be '1' or '2'", file=sys.stderr)
-        sys.exit(1)
+    if args.stat:
+        if args.stat in ['1', '2']:
+            for f_name, stat in stats.items():
+                print(f"[STAT] [{f_name}]: Score: {evaluate_stat_score(stat)}")
+                print(f"[STAT] [{f_name}]: Registers Used: {len(stat.registers_used)}")
+                if args.stat in ['2',]:
+                    print('\n'.join([f"               {k}: {v}" for k,v in asdict(stat).items()]))
+        else:
+            print("ERROR: stat argument should be '1' or '2'", file=sys.stderr)
+            sys.exit(1)
 
     if args.run:
         if not COMPILER_SETTINGS.generate_asm:

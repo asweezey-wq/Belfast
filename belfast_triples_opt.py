@@ -649,7 +649,7 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                 assert t.l_val.typ == TripleValueType.VAR_ASSIGN
                 variable = t.l_val.value
                 var_ref = create_var_ref_value(variable)
-                if var_ref in b.vals_assigned and b.vals_assigned[var_ref] != t:
+                if var_ref in b.vals_assigned and b.vals_assigned[var_ref].index > t.index:
                     trips.remove(t)
                     REMOVAL_HINTS[t] = "Assignment without use"
                     did_change = True
