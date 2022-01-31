@@ -1,11 +1,9 @@
-from ast import arg
 import os, sys
 from belfast_data import *
 from belfast_triples import *
-from belfast_triples_opt import optimize_triples
+from belfast_triples_opt import OPTIMIZATION_FLAGS, optimize_triples
 from belfast_x86 import convert_function_to_asm, get_asm_header, get_asm_footer, optimize_x86, output_x86_trips_to_str
 import re
-import copy
 
 keyword_regex = r'(?:(' + ('|'.join(KEYWORD_NAMES.keys())) + r')(?=\s|$|;))'
 builtins_regex = r'(' + ('|'.join(BUILTINS_NAMES.keys())) + r')'
@@ -673,14 +671,38 @@ if __name__ == '__main__':
     argp = argparse.ArgumentParser(description='The Belfast Compiler')
     argp.add_argument('file', help='The file input to the compiler')
     argp.add_argument('-o', '--output', dest='output', help='The output assembly file', default='prog.asm')
-    argp.add_argument('--no-comments', action='store_true', help='Turn off the comments generated in assembly')
-    argp.add_argument('--ir-only', action='store_true', help='Turn off the comments generated in assembly')
+    argp.add_argument('-c', '--do-comments', dest='do_comments', action='store_true', help='Turn off the comments generated in assembly')
+    argp.add_argument('-ir', '--ir-only', dest='ir_only', action='store_true', help='Only generate the IR code, not the assembly')
+    argp.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='Enable verbose mode')
+    argp.add_argument('-nc', '--no-const', dest='no_const', action='store_true', help='Disable constant propagation')
+    argp.add_argument('-reg', '--registers', dest='registers', action='store', help='Set the limit on the number of registers', default='0')
+    argp.add_argument('-r', '--run', dest='run', action='store_true', help='Compile and run the program')
     args = argp.parse_args()
 
     filename = args.file
 
-    if args.no_comments:
-        DO_ASM_COMMENTS = False
+    if args.do_comments:
+        COMPILER_SETTINGS.asm_comments = True
+    
+    if args.verbose:
+        COMPILER_SETTINGS.verbose = 1
+
+    if args.ir_only:
+        COMPILER_SETTINGS.generate_asm = False
+
+    if args.no_const:
+        COMPILER_SETTINGS.const_propagation = False
+
+    try:
+        COMPILER_SETTINGS.register_limit = int(args.registers)
+    except ValueError:
+        print('ERROR: Register limit must be a number', file=sys.stderr)
+        sys.exit(1)
+
+    COMPILER_SETTINGS.output_filename = args.output
+
+    OPTIMIZATION_FLAGS['const-eval'] = COMPILER_SETTINGS.const_propagation
+    OPTIMIZATION_FLAGS['value-forwarding'] = COMPILER_SETTINGS.const_propagation
 
     ast = file_to_ast(filename)[0]
     # for a in ast:
@@ -710,21 +732,45 @@ if __name__ == '__main__':
         index_triples(f_trips)
         for t in f_trips:
             prog_tripstr += f"{print_triple(t)}\n"
-        f_trips = optimize_x86(f_trips, fun_ctx)
-        x86_tripstr += f"FUNCTION {f_name}\n"
-        x86_tripstr += output_x86_trips_to_str(f_trips, fun_ctx)
-        x86_tripstr += "\n"
-        if not args.ir_only:
-            asm += convert_function_to_asm(f_name, f_trips, fun_ctx, args.no_comments)
+        if COMPILER_SETTINGS.generate_asm:
+            f_trips = optimize_x86(f_trips, fun_ctx)
+            x86_tripstr += f"FUNCTION {f_name}\n"
+            x86_tripstr += output_x86_trips_to_str(f_trips, fun_ctx)
+            x86_tripstr += "\n"
+            asm += convert_function_to_asm(f_name, f_trips, fun_ctx)
         prog_tripstr += "\n"
 
-    with open('prog.tripstr', 'w') as f:
-        f.write(prog_tripstr)
-    with open('prog_x86.tripstr', 'w') as f:
-        f.write(x86_tripstr)
+    if COMPILER_SETTINGS.generate_tripstr:
+        with open('prog.tripstr', 'w') as f:
+            f.write(prog_tripstr)
+        with open('prog_x86.tripstr', 'w') as f:
+            f.write(x86_tripstr)
 
-    asm += get_asm_footer(trip_ctx, called_funs)
     
-    if not args.ir_only:
+    if COMPILER_SETTINGS.generate_asm:
+        asm += get_asm_footer(trip_ctx, called_funs)
         with open(args.output, 'w') as f_asm:
             f_asm.write(asm)
+
+    if args.run:
+        if not COMPILER_SETTINGS.generate_asm:
+            print("ERROR: You must enable x86 aseembly generation to run the program", file=sys.stderr)
+            sys.exit(1)
+        
+        cmd = f"nasm -fmacho64 {args.output} -o a.out.o"
+        if COMPILER_SETTINGS.verbose >= 1:
+            print(f"[INFO]: Executing '{cmd}'")
+        os.system(cmd)
+        cmd = f"ld -lSystem -L$(xcode-select -p)/SDKs/MacOSX.sdk/usr/lib a.out.o -o a.out"
+        if COMPILER_SETTINGS.verbose >= 1:
+            print(f"[INFO]: Executing '{cmd}'")
+        os.system(cmd)
+        cmd = f"rm a.out.o 2>/dev/null"
+        if COMPILER_SETTINGS.verbose >= 1:
+            print(f"[INFO]: Executing '{cmd}'")
+        os.system(cmd)
+        cmd = f"./a.out"
+        if COMPILER_SETTINGS.verbose >= 1:
+            print(f"[INFO]: Executing '{cmd}'")
+        os.system(cmd)
+

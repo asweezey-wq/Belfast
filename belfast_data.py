@@ -447,3 +447,15 @@ MEM_WORD_SIZE_MAP = {
     32: 'dword',
     64: 'qword'
 }
+
+@dataclass
+class CompilerSettings:
+    output_filename: str = ''
+    generate_tripstr: bool = True
+    generate_asm: bool = True
+    verbose: int = 0
+    asm_comments: bool = False
+    register_limit: int = 0
+    const_propagation: bool = True
+
+COMPILER_SETTINGS = CompilerSettings()

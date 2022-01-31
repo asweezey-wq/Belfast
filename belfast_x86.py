@@ -296,7 +296,8 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
                                     coalesce_nodes[tref] = []
                                 coalesce_nodes[tref].append(c_w)
 
-        register_alloc, spilled = color_interf_graph_chaitin_briggs(interf_graph, {}, precolors, len(DATA_REGISTERS))
+        num_regs = len(DATA_REGISTERS) if COMPILER_SETTINGS.register_limit == 0 else COMPILER_SETTINGS.register_limit
+        register_alloc, spilled = color_interf_graph_chaitin_briggs(interf_graph, {}, precolors, num_regs)
 
         DO_COALESCE = True
 
@@ -525,7 +526,7 @@ def move_instr(reg:int, tv: TripleValue, trip_ctx: TripleContext):
     else:
         return f"mov {reg_str_for_size(reg)}, {triple_value_str(tv, trip_ctx)}"
 
-def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: TripleContext, no_comments=False):
+def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: TripleContext):
     asm = ""
     if any([t.typ == TripleType.PRINT for t in trips]) and not trip_ctx.has_generated_print_code:
         with open('./print_d.asm', 'r') as f:
@@ -558,7 +559,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
         write_asm(f"sub rsp, {stack_space_alloc}")
 
     for t in trips:
-        if not no_comments:
+        if COMPILER_SETTINGS.asm_comments:
             asm += f"  ; {print_triple(t)}\n"
         try:
             lv = t.l_val

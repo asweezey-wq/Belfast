@@ -784,10 +784,11 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
 
     prev_trips: List[Triple] = None
 
-    with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'w') as f:
-        for t in trips:
-            f.write(f"{print_triple(t)}\n")
-        f.write("\n")
+    if COMPILER_SETTINGS.generate_tripstr:
+        with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'w') as f:
+            for t in trips:
+                f.write(f"{print_triple(t)}\n")
+            f.write("\n")
 
     while did_modify:
         did_modify = False
@@ -796,7 +797,7 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
         label_references: Dict[Triple, List[Triple]] = {}
         for t in filter(lambda x: x.typ == TripleType.LABEL, trips):
             label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, trips))
-        if prev_trips is not None:
+        if COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
             d = get_triple_delta(prev_trips, trips)
             output_triple_delta_to_file(d, f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr")
             with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'a') as f:
