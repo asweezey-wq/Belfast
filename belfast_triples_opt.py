@@ -167,7 +167,7 @@ def evaluate_triple_const(triple: Triple):
                     case Operator.MULTIPLY:
                         return n1 * n2
                     case Operator.DIVIDE:
-                        return n1 // n2
+                        return int(n1 / n2)
                     case Operator.MODULUS:
                         return n1 % n2
                     case Operator.EQ:
