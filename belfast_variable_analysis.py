@@ -42,7 +42,7 @@ def color_interf_graph_simplicial(interf_graph: Dict[Any, List[Any]], coalesce_e
     
     return graph_color
 
-def color_interf_graph_chaitin_briggs(interf_graph: Dict[Any, List[Any]], coalesce_edges: Dict[Any, List[Any]], precolored_nodes: Dict[Any, int], k: int) -> Dict[Any, int]:
+def color_interf_graph_chaitin_briggs(interf_graph: Dict[Any, List[Any]], coalesce_edges: Dict[Any, List[Any]], precolored_nodes: Dict[Any, int], k: int, force_no_spill=()) -> Dict[Any, int]:
     graph_color = {}
 
     for p,v in precolored_nodes.items():
@@ -60,6 +60,12 @@ def color_interf_graph_chaitin_briggs(interf_graph: Dict[Any, List[Any]], coales
     ordering = []
     potential_spill = set()
 
+    for v in force_no_spill:
+        for e in G[v]:
+            if e in G:
+                G[e].remove(v)
+        del G[v]
+
     while len(G) > 0:
         val_weights = {v: len(e) for v,e in G.items()}
         valid_vertices = sorted([v for v in G if val_weights[v] < k], key=lambda x: val_weights[x], reverse=True)
@@ -73,6 +79,8 @@ def color_interf_graph_chaitin_briggs(interf_graph: Dict[Any, List[Any]], coales
             if e in G:
                 G[e].remove(v)
         del G[v]
+
+    ordering.extend(force_no_spill)
 
     spilled_nodes = []
 

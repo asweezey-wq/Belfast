@@ -297,7 +297,7 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
                                 coalesce_nodes[tref].append(c_w)
 
         num_regs = len(DATA_REGISTERS) if COMPILER_SETTINGS.register_limit == 0 else COMPILER_SETTINGS.register_limit
-        register_alloc, spilled = color_interf_graph_chaitin_briggs(interf_graph, {}, precolors, num_regs)
+        register_alloc, spilled = color_interf_graph_chaitin_briggs(interf_graph, {}, precolors, num_regs, force_no_spill=(memory_register_value,) if memory_register_value else ())
 
         DO_COALESCE = True
 
@@ -361,6 +361,9 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
             for k in interf_graph:
                 interf_graph[k].add(memory_register_value)
             interf_graph[memory_register_value] = set(interf_graph.keys())
+        elif memory_register_value in spilled:
+            print("ERROR: No viable register allocation found", file=sys.stderr)
+            sys.exit(1)
         for v in spilled:
             if v == memory_register_value:
                 continue

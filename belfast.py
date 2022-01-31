@@ -695,6 +695,9 @@ if __name__ == '__main__':
 
     try:
         COMPILER_SETTINGS.register_limit = int(args.registers)
+        if 0 < COMPILER_SETTINGS.register_limit <= 7:
+            print("ERROR: x86 architectures must use at least 8 registers", file=sys.stderr)
+            sys.exit(1)
     except ValueError:
         print('ERROR: Register limit must be a number', file=sys.stderr)
         sys.exit(1)
