@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os, sys
 from belfast_data import *
 from belfast_triples import *
@@ -677,6 +678,7 @@ if __name__ == '__main__':
     argp.add_argument('-nc', '--no-const', dest='no_const', action='store_true', help='Disable constant propagation')
     argp.add_argument('-reg', '--registers', dest='registers', action='store', help='Set the limit on the number of registers', default='0')
     argp.add_argument('-r', '--run', dest='run', action='store_true', help='Compile and run the program')
+    argp.add_argument('-s', '--stat', dest='stat', help='Stat the code generation')
     args = argp.parse_args()
 
     filename = args.file
@@ -725,6 +727,8 @@ if __name__ == '__main__':
 
     called_funs.append('main')
 
+    stats = {}
+
     for f_name in called_funs:
         f_trips = trip_ctx.functions[f_name]
         prog_tripstr += f"FUNCTION {f_name}\n"
@@ -740,8 +744,13 @@ if __name__ == '__main__':
             x86_tripstr += f"FUNCTION {f_name}\n"
             x86_tripstr += output_x86_trips_to_str(f_trips, fun_ctx)
             x86_tripstr += "\n"
-            asm += convert_function_to_asm(f_name, f_trips, fun_ctx)
+            stat = CodeScoreStat()
+            asm += convert_function_to_asm(f_name, f_trips, fun_ctx, stat)
+            stats[f_name] = stat
         prog_tripstr += "\n"
+
+    if COMPILER_SETTINGS.verbose >= 1:
+        print("[INFO] Compiled successfully")
 
     if COMPILER_SETTINGS.generate_tripstr:
         with open('prog.tripstr', 'w') as f:
@@ -755,6 +764,16 @@ if __name__ == '__main__':
         with open(args.output, 'w') as f_asm:
             f_asm.write(asm)
 
+    if args.stat in ['1', '2']:
+        for f_name, stat in stats.items():
+            print(f"[STAT] [{f_name}]: Score: {evaluate_stat_score(stat)}")
+            print(f"[STAT] [{f_name}]: Registers Used: {len(stat.registers_used)}")
+            if args.stat in ['2',]:
+                print('\n'.join([f"               {k}: {v}" for k,v in asdict(stat).items()]))
+    else:
+        print("ERROR: stat argument should be '1' or '2'", file=sys.stderr)
+        sys.exit(1)
+
     if args.run:
         if not COMPILER_SETTINGS.generate_asm:
             print("ERROR: You must enable x86 aseembly generation to run the program", file=sys.stderr)
@@ -762,18 +781,18 @@ if __name__ == '__main__':
         
         cmd = f"nasm -fmacho64 {args.output} -o a.out.o"
         if COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO]: Executing '{cmd}'")
+            print(f"[INFO] Executing '{cmd}'")
         os.system(cmd)
         cmd = f"ld -lSystem -L$(xcode-select -p)/SDKs/MacOSX.sdk/usr/lib a.out.o -o a.out"
         if COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO]: Executing '{cmd}'")
+            print(f"[INFO] Executing '{cmd}'")
         os.system(cmd)
         cmd = f"rm a.out.o 2>/dev/null"
         if COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO]: Executing '{cmd}'")
+            print(f"[INFO] Executing '{cmd}'")
         os.system(cmd)
         cmd = f"./a.out"
         if COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO]: Executing '{cmd}'")
+            print(f"[INFO] Executing '{cmd}'")
         os.system(cmd)
 

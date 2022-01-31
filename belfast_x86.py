@@ -515,6 +515,21 @@ def triple_value_str(tv: TripleValue, trip_ctx: TripleContext, as_hex=False, siz
         case _:
             assert False, f"Type {tv.typ.name} not implemented"
 
+def is_triple_value_in_memory(tv: TripleValue):
+    return tv.typ == TripleValueType.ON_STACK
+
+# implied other operand is a register
+def stat_move(tv: TripleValue, s: CodeScoreStat):
+    if is_triple_value_in_memory:
+        s.mem_loads += 1
+    s.mov_ops += 1
+
+# implied other operand is a register
+def stat_binop(tv: TripleValue, s: CodeScoreStat):
+    if is_triple_value_in_memory:
+        s.mem_loads += 1
+    s.basic_ops += 1
+
 BOP_MAP = {
     Operator.PLUS: 'add',
     Operator.MINUS: 'sub',
@@ -529,7 +544,7 @@ def move_instr(reg:int, tv: TripleValue, trip_ctx: TripleContext):
     else:
         return f"mov {reg_str_for_size(reg)}, {triple_value_str(tv, trip_ctx)}"
 
-def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: TripleContext):
+def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: TripleContext, code_stats: CodeScoreStat):
     asm = ""
     if any([t.typ == TripleType.PRINT for t in trips]) and not trip_ctx.has_generated_print_code:
         with open('./print_d.asm', 'r') as f:
@@ -546,6 +561,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
         for i in CALLEE_SAVED_REG:
             if i in trip_ctx.register_alloc.values():
                 saved_registers.append(i)
+                code_stats.mem_stores += 1
                 write_asm(f"push {reg_str_for_size(i)}")
 
     stack_space_alloc = 0
@@ -559,7 +575,10 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
         stack_space_alloc = ((stack_space_alloc // 16) + 1) * 16
     
     if stack_space_alloc > 0:
+        code_stats.basic_ops += 1
         write_asm(f"sub rsp, {stack_space_alloc}")
+
+    code_stats.registers_used = set(trip_ctx.register_alloc.values())
 
     for t in trips:
         if COMPILER_SETTINGS.asm_comments:
@@ -575,18 +594,27 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                 case TripleType.REGMOVE | TripleType.ASSIGN:
                     if lv.typ == TripleValueType.REGISTER:
                         if rv.typ == TripleValueType.CONSTANT and rv.value == 0:
+                            code_stats.basic_ops += 1
                             write_asm(f"xor {triple_value_str(lv, trip_ctx)}, {triple_value_str(lv, trip_ctx)}")
                         elif rv.typ == TripleValueType.REGISTER and rv.value == lv.value:
                             pass
                         else:
+                            code_stats.mov_ops += 1
                             write_asm(move_instr(lv.value, rv, trip_ctx))
                     elif lv.typ == TripleValueType.ON_STACK:
                         assert rv.typ != TripleValueType.ON_STACK
                         if rv.typ not in (TripleValueType.REGISTER, TripleValueType.CONSTANT):
                             assert trip_ctx.memory_spill_register is not None
+                            code_stats.mov_ops += 1
+                            code_stats.mem_loads += 1
+                            if is_triple_value_in_memory(lv):
+                                code_stats.mem_stores += 1
                             write_asm(move_instr(trip_ctx.memory_spill_register, rv, trip_ctx))
                             write_asm(f"mov qword {triple_value_str(lv, trip_ctx)}, {reg_str_for_size(trip_ctx.memory_spill_register)}")
                         else:
+                            code_stats.mov_ops += 1
+                            if is_triple_value_in_memory(lv):
+                                code_stats.mem_stores += 1
                             write_asm(f"mov qword {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
                     else:
                         assert False, f"Unhandled data type {lv.typ.name} in assign LHS"
@@ -600,19 +628,23 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                                 if t.op in [Operator.PLUS,Operator.BITWISE_AND, Operator.BITWISE_OR, Operator.BITWISE_XOR]:
                                     switch_lr = True
                                 else:
+                                    code_stats.basic_ops += 2
                                     write_asm(f"xchg {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
                                     temp = rv
                                     rv = lv
                                     lv = temp
                             else:
+                                stat_move(lv, code_stats)
                                 write_asm(move_instr(t_reg, lv, trip_ctx))
                                 lv = TripleValue(TripleValueType.REGISTER, t_reg)
                         if lv.typ == TripleValueType.ON_STACK:
                             # TODO: Binary operators can handle stack values 
                             if t_reg is not None:
+                                stat_move(lv, code_stats)
                                 write_asm(move_instr(t_reg, lv, trip_ctx))
                                 lv = TripleValue(TripleValueType.REGISTER, t_reg)
                             else:
+                                stat_move(lv, code_stats)
                                 write_asm(move_instr(trip_ctx.memory_spill_register, lv, trip_ctx))
                                 lv = TripleValue(TripleValueType.REGISTER, trip_ctx.memory_spill_register)
                         if switch_lr:
@@ -625,18 +657,24 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                             if lv.value != t_reg:
                                 if rv.typ == TripleValueType.REGISTER and rv.value == t_reg:
                                     switch_lr = True
+                                    stat_binop(lv, code_stats)
                                     write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(lv, trip_ctx)}")
                                 else:
                                     if DO_ADDRESS_COMPUTING and lv.typ == TripleValueType.REGISTER and rv.typ in [TripleValueType.CONSTANT, TripleValueType.REGISTER]:
+                                        code_stats.basic_ops += 1
                                         write_asm(f"lea {reg_str_for_size(t_reg)}, [{reg_str_for_size(lv.value)}+{triple_value_str(rv, trip_ctx)}]")
                                     else:
+                                        stat_move(lv, code_stats)
                                         write_asm(move_instr(t_reg, lv, trip_ctx))
+                                        stat_binop(rv, code_stats)
                                         write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(rv, trip_ctx)}")
                             else:
+                                stat_binop(rv, code_stats)
                                 write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(rv, trip_ctx)}")
                         case Operator.MINUS | Operator.BITWISE_XOR | Operator.BITWISE_AND | Operator.BITWISE_OR:
                             assert t_reg is not None, "Expected this value to be assigned to a register"
                             assert lv.value == t_reg
+                            stat_binop(lv if switch_lr else rv, code_stats)
                             if switch_lr:
                                 write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(lv, trip_ctx)}")
                             else:
@@ -644,37 +682,46 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                         case Operator.GE | Operator.LE | Operator.GT | Operator.LT | Operator.NE | Operator.EQ:
                             assert t_reg is not None or (t.flags & TF_BOOL_FORWARDED) > 0, "Expected this value to be assigned to a register or forwarded to next operation"
                             if t_reg is not None:
+                                code_stats.basic_ops += 2
+                                code_stats.mov_ops += 1
                                 write_asm(f"cmp {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
                                 write_asm(f"mov {reg_str_for_size(t_reg)}, 0")
                                 write_asm(f"set{CMP_OP_INSTR_MAP[t.op]} {reg_str_for_size(t_reg, 8)}")
                             else:
+                                code_stats.basic_ops += 1
                                 write_asm(f"cmp {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
                         case Operator.SHIFT_LEFT | Operator.SHIFT_RIGHT:
                             assert rv.typ == TripleValueType.CONSTANT or (rv.typ == TripleValueType.REGISTER and rv.value == RCX_INDEX), "Expected RHS to be constant or RCX"
                             op = 'shl' if t.op == Operator.SHIFT_LEFT else 'shr'
                             if t.flags & TF_SIGNED:
                                 op = 'sal' if t.op == Operator.SHIFT_LEFT else 'sar'
+                            stat_binop(rv, code_stats)
                             write_asm(f"{op} {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx, size=8)}")
                         case Operator.MULTIPLY:
                             assert t_reg is not None and t_reg == RAX_INDEX and lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected mul to read and write from/to RAX"
                             assert rv.typ == TripleValueType.REGISTER, "Expected div RHS to be in a register"
+                            code_stats.mul_ops += 1
                             write_asm(f"imul {triple_value_str(rv, trip_ctx)}")
                         case Operator.DIVIDE:
                             assert t_reg is not None and t_reg == RAX_INDEX and lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected div to read and write from/to RAX"
                             assert rv.typ == TripleValueType.REGISTER, "Expected div RHS to be in a register"
+                            code_stats.div_ops += 1
                             write_asm(f"idiv {triple_value_str(rv, trip_ctx)}")
                         case Operator.MODULUS:
                             assert t_reg is not None and t_reg == RDX_INDEX, "Expected modulus write to RDX"
                             assert lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected modulus to read from RAX"
                             assert rv.typ == TripleValueType.REGISTER, "Expected modulus RHS to be in a register"
+                            code_stats.div_ops += 1
                             write_asm(f"idiv {triple_value_str(rv, trip_ctx)}")
                         case _:
                             assert False, f"Unimplemented operator {t.op.name}"
                 case TripleType.UNARY_OP:
                     if t_reg is not None and ((lv.typ in (TripleValueType.CONSTANT, TripleValueType.ON_STACK)) or (lv.typ == TripleValueType.REGISTER and lv.value != t_reg)):
+                        stat_move(lv, code_stats)
                         write_asm(move_instr(t_reg, lv, trip_ctx))
                         lv = TripleValue(TripleValueType.REGISTER, t_reg)
                     assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
+                    code_stats.basic_ops += 1
                     match t.op:
                         case Operator.NEGATE:
                             assert t_reg is not None, "Expected this value to be assigned to a register"
@@ -688,14 +735,17 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     write_asm(f"{trip_ctx.ctx_name}_L{t.index}:")
                 case TripleType.GOTO:
                     assert lv.typ == TripleValueType.TRIPLE_TARGET, "Expected GOTO LHS to be a label"
+                    code_stats.jmp_ops += 1
                     write_asm(f"jmp {triple_value_str(lv, trip_ctx)}")
                 case TripleType.IF_COND:
                     assert rv.typ == TripleValueType.TRIPLE_TARGET, "IF_COND expected RHS value to be a label"
+                    code_stats.cond_jmp_ops += 1
                     if lv.typ == TripleValueType.TRIPLE_REF and (lv.value.flags & TF_BOOL_FORWARDED) > 0:
                         assert lv.value.op in CMP_OP_INSTR_MAP, "Expected Bool forwarded triple to be a CMP op"
                         write_asm(f"j{CMP_OP_INSTR_MAP[INVERT_CMP_OP[lv.value.op]]} {triple_value_str(rv, trip_ctx)}")
                     else:
                         assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
+                        code_stats.basic_ops += 1
                         write_asm(f"cmp {triple_value_str(lv, trip_ctx)}, 0")
                         if t.op == Operator.NE:
                             write_asm(f"je {triple_value_str(rv, trip_ctx)}")
@@ -707,6 +757,8 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     assert rv.typ in [TripleValueType.REGISTER, TripleValueType.CONSTANT], "Expected STORE RHS to be a constant or register"
                     mem_word = MEM_WORD_SIZE_MAP[t.size]
                     if lv.typ in [TripleValueType.REGISTER, TripleValueType.STRING_REF, TripleValueType.BUFFER_REF, TripleValueType.LOCAL_BUFFER_REF]:
+                        code_stats.mem_stores += 1
+                        code_stats.mov_ops += 1
                         write_asm(f"mov {mem_word} [{triple_value_str(lv, trip_ctx)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
                     elif lv.typ == TripleValueType.ADDRESS_COMPUTE:
                         lv1 = lv.value[0]
@@ -717,17 +769,25 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                         stack_vals = [v for v in (lv1, lv2) if v.typ == TripleValueType.ON_STACK]
                         
                         if len(stack_vals) == 2:
+                            code_stats.basic_ops += 1
+                            code_stats.mov_ops += 2
+                            code_stats.mem_loads += 2
+                            code_stats.mem_stores += 1
                             write_asm(move_instr(trip_ctx.memory_spill_register, stack_vals[0], trip_ctx))
                             write_asm(f"add {reg_str_for_size(trip_ctx.memory_spill_register)}, {triple_value_str(stack_vals[1], trip_ctx)}")
                             write_asm(f"mov {mem_word} [{reg_str_for_size(trip_ctx.memory_spill_register)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
                         else:
                             if len(stack_vals) == 1:
+                                code_stats.mov_ops += 1
+                                code_stats.mem_loads += 1
                                 write_asm(move_instr(trip_ctx.memory_spill_register, stack_vals[0], trip_ctx))
                                 stack_vals.pop()
                                 regs.append(create_register_value(trip_ctx.memory_spill_register))
                             if len(regs) == 2 or (len(regs) == 1 and len(consts) == 1):
                                 la = regs[0]
                                 ra = regs[1] if len(regs) > 1 else consts[0]
+                                code_stats.mem_stores += 1
+                                code_stats.mov_ops += 1
                                 write_asm(f"mov {mem_word} [{triple_value_str(la, trip_ctx)}{'+' if pos == 1 else '-'}{triple_value_str(ra, trip_ctx)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
                             else:
                                 assert False
@@ -736,6 +796,8 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     mem_word = MEM_WORD_SIZE_MAP[t.size]
                     instr = "movsx" if t.flags & TF_SIGNED else "movzx"
                     if lv.typ in [TripleValueType.REGISTER, TripleValueType.STRING_REF, TripleValueType.BUFFER_REF, TripleValueType.LOCAL_BUFFER_REF]:
+                        code_stats.mov_ops += 1
+                        code_stats.mem_loads += 1
                         write_asm(f"{instr} {reg_str_for_size(t_reg)}, {mem_word} [{triple_value_str(lv, trip_ctx)}]")
                     elif lv.typ == TripleValueType.ADDRESS_COMPUTE:
                         lv1 = lv.value[0]
@@ -746,17 +808,24 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                         stack_vals = [v for v in (lv1, lv2) if v.typ == TripleValueType.ON_STACK]
                         
                         if len(stack_vals) == 2:
+                            code_stats.basic_ops += 1
+                            code_stats.mov_ops += 2
+                            code_stats.mem_loads += 3
                             write_asm(move_instr(trip_ctx.memory_spill_register, stack_vals[0], trip_ctx))
                             write_asm(f"add {reg_str_for_size(trip_ctx.memory_spill_register)}, {triple_value_str(stack_vals[1], trip_ctx)}")
                             write_asm(f"{instr} {reg_str_for_size(t_reg)}, {mem_word} [{reg_str_for_size(trip_ctx.memory_spill_register)}]")
                         else:
                             if len(stack_vals) == 1:
+                                code_stats.mem_loads += 1
+                                code_stats.mov_ops += 1
                                 write_asm(move_instr(trip_ctx.memory_spill_register, stack_vals[0], trip_ctx))
                                 stack_vals.pop()
                                 regs.append(create_register_value(trip_ctx.memory_spill_register))
                             if len(regs) == 2 or (len(regs) == 1 and len(consts) == 1):
                                 la = regs[0]
                                 ra = regs[1] if len(regs) > 1 else consts[0]
+                                code_stats.mem_loads += 1
+                                code_stats.mov_ops += 1
                                 write_asm(f"{instr} {reg_str_for_size(t_reg)}, {mem_word} [{triple_value_str(la, trip_ctx)}{'+' if pos == 1 else '-'}{triple_value_str(ra, trip_ctx)}]")
                             else:
                                 assert False
@@ -766,38 +835,50 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     assert lv is not None and lv.typ == TripleValueType.CONSTANT, "SYSCALL expected a numerical syscall argument"
                     save_regs = list(filter(lambda x: x in [3, 12], trip_ctx.get_all_used_registers(t.index)))
                     for r in save_regs:
+                        code_stats.mem_stores += 1
                         write_asm(f"push {reg_str_for_size(r)}")
+                    stat_move(lv, code_stats)
                     write_asm(move_instr(t_reg, lv, trip_ctx))
+                    code_stats.syscalls += 1
                     write_asm("syscall")
                     for r in reversed(save_regs):
+                        code_stats.mem_loads += 1
                         write_asm(f"pop {reg_str_for_size(r)}")
                 case TripleType.PRINT:
                     save_regs = list(filter(lambda x: x in DATA_REGISTERS, trip_ctx.get_all_used_registers(t.index+1)))
                     for r in save_regs:
+                        code_stats.mem_stores += 1
                         write_asm(f"push {reg_str_for_size(r)}")
                     if lv.typ != TripleValueType.REGISTER or lv.value != RDI_INDEX:
+                        stat_move(lv, code_stats)
                         write_asm(move_instr(RDI_INDEX, lv, trip_ctx))
+                    code_stats.fun_calls += 1
                     write_asm("call _printd")
                     for r in reversed(save_regs):
+                        code_stats.mem_loads += 1
                         write_asm(f"pop {reg_str_for_size(r)}")
                 case TripleType.NOP_USE:
                     pass
                 case TripleType.NOP_REF:
                     assert t_reg is not None, "Expected this value to be assigned to a register"
                     if lv.typ != TripleValueType.REGISTER or lv.value != t_reg:
+                        stat_move(lv, code_stats)
                         write_asm(move_instr(t_reg, lv, trip_ctx))
                 case TripleType.FUN_ARG_IN:
                     pass
                 case TripleType.CALL:
                     # TODO: Optimize saves/loads
-                    assert lv is not None and lv.typ == TripleValueType.FUN_LABEL                    
+                    assert lv is not None and lv.typ == TripleValueType.FUN_LABEL  
+                    code_stats.fun_calls += 1                  
                     write_asm(f"call {triple_value_str(lv, trip_ctx)}")
                 case TripleType.RETURN:
                     l_reg = trip_ctx.get_allocated_register(t.l_val, t.index)
                     if l_reg is None or l_reg != RAX_INDEX:
                         if t.l_val.typ == TripleValueType.CONSTANT and t.l_val.value == 0:
+                            code_stats.basic_ops += 1
                             write_asm(f"xor rax, rax")
                         else:
+                            stat_move(t.l_val, code_stats)
                             write_asm(move_instr(RAX_INDEX, t.l_val, trip_ctx))
                 case _:
                     assert False, f"Triple Type {t.typ.name} not implemented"
@@ -807,10 +888,12 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
             sys.exit(1)
 
     if stack_space_alloc > 0:
+        code_stats.basic_ops += 1
         write_asm(f"add rsp, {stack_space_alloc}")
     
     if fun_name != 'main' and len(saved_registers) > 0:
         for i in reversed(saved_registers):
+            code_stats.mem_loads += 1
             write_asm(f"pop {reg_str_for_size(i)}")
 
     asm += "    ret\n\n"

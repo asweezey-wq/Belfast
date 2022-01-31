@@ -1,6 +1,6 @@
 from enum import Enum, auto
 from typing import *
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import sys
 
 DO_ASM_COMMENTS = True
@@ -459,3 +459,32 @@ class CompilerSettings:
     const_propagation: bool = True
 
 COMPILER_SETTINGS = CompilerSettings()
+
+@dataclass
+class CodeScoreStat:
+    mov_ops: int = 0
+    basic_ops: int = 0
+    mem_loads: int = 0
+    mem_stores: int = 0
+    mul_ops: int = 0
+    div_ops: int = 0
+    jmp_ops: int = 0
+    cond_jmp_ops: int = 0
+    syscalls: int = 0
+    fun_calls: int = 0
+    registers_used: List[int] = ()
+
+def evaluate_stat_score(s: CodeScoreStat):
+    score = 0
+    score += s.mov_ops
+    score += s.basic_ops
+    score += s.mem_loads * 2
+    score += s.mem_stores * 2
+    score += s.mul_ops * 4
+    score += s.div_ops * 50
+    score += s.jmp_ops * 2
+    score += s.cond_jmp_ops * 2
+    score += s.syscalls * 3
+    score += s.fun_calls * 3
+    return score
+
