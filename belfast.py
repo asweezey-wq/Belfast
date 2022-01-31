@@ -309,13 +309,13 @@ def parse_tokens(tokens: List[Token]):
 
     def parse_load():
         tok = tokens[index]
-        assert tok.typ == TokenType.KEYWORD and tok.value in [Keyword.LOAD8, Keyword.LOAD64], "Shouldnt be here"
+        assert tok.typ == TokenType.KEYWORD and tok.value in [Keyword.LOAD8, Keyword.SLOAD8, Keyword.LOAD64], "Shouldnt be here"
         expect_keyword(tok.value)
         expect_token(TokenType.OPEN_PAREN)
         exp = parse_expression()
         expect_token(TokenType.CLOSE_PAREN)
         sz = KW_SIZE_MAP[tok.value]
-        return ASTNode_Load(ASTType.LOAD, tok, exp, sz)
+        return ASTNode_Load(ASTType.LOAD, tok, exp, sz, tok.value == Keyword.SLOAD8)
 
     def parse_store():
         tok = tokens[index]
@@ -467,7 +467,7 @@ def parse_tokens(tokens: List[Token]):
                     return parse_buffer_alloc()
                 case Keyword.STORE8 | Keyword.STORE64:
                     return parse_store()
-                case Keyword.LOAD8 | Keyword.LOAD64:
+                case Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8:
                     return parse_load()
 
         return parse_base()
@@ -536,7 +536,7 @@ def parse_tokens(tokens: List[Token]):
                         return_ast = parse_buffer_alloc()
                     case Keyword.STORE8 | Keyword.STORE64:
                         return_ast = parse_store()
-                    case Keyword.LOAD8 | Keyword.LOAD64:
+                    case Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8:
                         return_ast = parse_load()
                     case Keyword.INCLUDE:
                         parse_include()

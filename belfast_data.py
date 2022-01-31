@@ -27,6 +27,7 @@ class Keyword(Enum):
     RETURN = auto()
 
     LOAD8 = auto()
+    SLOAD8 = auto()
     STORE8 = auto()
 
     LOAD64 = auto()
@@ -81,6 +82,7 @@ BUILTINS_NAMES = {
     'load64': Keyword.LOAD64,
     'store64': Keyword.STORE64,
     'load8': Keyword.LOAD8,
+    'sload8': Keyword.SLOAD8,
     'store8': Keyword.STORE8,
 }
 
@@ -208,6 +210,7 @@ class ASTNode_Store(ASTNode_Base):
 class ASTNode_Load(ASTNode_Base):
     ptr_exp: ASTNode_Base
     size: int
+    signed: bool
 
 @dataclass
 class ASTNode_Fundef(ASTNode_Base):
@@ -246,6 +249,7 @@ TOKEN_OP_MAP = {
 
 KW_SIZE_MAP = {
     Keyword.LOAD8:      8,
+    Keyword.SLOAD8:     8,
     Keyword.STORE8:     8,
     Keyword.LOAD64:     64,
     Keyword.STORE64:    64,
@@ -343,7 +347,7 @@ def trip_val_to_str(tv:TripleValue, as_hex=False):
         case _:
             assert False, f"Unhandled Triple Value Type {tv.typ.name}"
 
-TF_EPHEMERAL = 1 # Ephemeral triples are only used in one computation, after which they are not used
+TF_SIGNED = 1 # Indicates a signed operation
 TF_BOOL_FORWARDED = 2 # Forwarded booleans are used immediately afterwards in a jump
 TF_REMOVE = 4 # Should remove
 

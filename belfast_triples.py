@@ -185,7 +185,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             else:
                 triples.extend(l_trips)
                 triples.extend(r_trips)
-                triples.append(Triple(TripleType.BINARY_OP,op=op, l_val=l_trip_val, r_val=r_trip_val))
+                triples.append(Triple(TripleType.BINARY_OP,op=op, l_val=l_trip_val, r_val=r_trip_val, flags=TF_SIGNED))
                 trip_val = create_tref_value(triples[-1])
         case ASTType.UNARY_OP:
             exp_trips, exp_trip_val = ast_to_triples(ast.ast_ref, ctx)
@@ -300,6 +300,8 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             ptr_exp_trips, ptr_exp_val = ast_to_triples(ast.ptr_exp, ctx)
             triples.extend(ptr_exp_trips)
             triples.append(Triple(TripleType.LOAD, None, ptr_exp_val, None, size=ast.size))
+            if ast.signed:
+                triples[-1].flags |= TF_SIGNED
             trip_val = create_tref_value(triples[-1])
         case ASTType.STORE:
             ptr_exp_trips, ptr_exp_val = ast_to_triples(ast.ptr_exp, ctx)

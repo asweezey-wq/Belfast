@@ -105,6 +105,7 @@ def strength_reduce(triple: Triple):
                             l2 = log2(triple.r_val.value)
                             if l2 == int(l2):
                                 triple.op = Operator.SHIFT_LEFT
+                                triple.flags |= TF_SIGNED
                                 triple.r_val = create_const_value(int(l2))
                                 REMOVAL_HINTS[triple] = "Strength Reduce"
                                 return True
@@ -119,6 +120,7 @@ def strength_reduce(triple: Triple):
                             l2 = log2(triple.l_val.value)
                             if l2 == int(l2):
                                 triple.op = Operator.SHIFT_LEFT
+                                triple.flags |= TF_SIGNED
                                 triple.l_val = triple.r_val
                                 triple.r_val = create_const_value(int(l2))
                                 REMOVAL_HINTS[triple] = "Strength Reduce"
@@ -136,6 +138,7 @@ def strength_reduce(triple: Triple):
                         l2 = log2(triple.r_val.value)
                         if l2 == int(l2):
                             triple.op = Operator.SHIFT_RIGHT
+                            triple.flags |= TF_SIGNED
                             triple.r_val = create_const_value(int(l2))
                             REMOVAL_HINTS[triple] = "Strength Reduce"
                             return True
