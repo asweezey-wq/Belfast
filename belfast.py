@@ -9,7 +9,7 @@ import re
 
 keyword_regex = r'(?:(' + ('|'.join(KEYWORD_NAMES.keys())) + r')(?=\s|$|;))'
 builtins_regex = r'(' + ('|'.join(BUILTINS_NAMES.keys())) + r')'
-lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|((?:(?<=\s)-)?[0-9]+)|(\|\||&&|<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^!~])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
+lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|((?:(?<=\s)-)?[0-9]+)|(\|\||&&|<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^!~\.])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
 # print(lang_regex)
 regex_type_map = [
     TokenType.KEYWORD,
@@ -117,6 +117,8 @@ def tokenize_string(filepath:str, input_string: str):
                             typ = TokenType.LOGICAL_OR
                         case '&&':
                             typ = TokenType.LOGICAL_AND
+                        case '.':
+                            typ = TokenType.PERIOD
                         case _:
                             assert False, f"Unhandled token '{t[6]}'"
                 elif t[8] is not None:
@@ -161,6 +163,8 @@ def parse_tokens(tokens: List[Token]):
     defining_function_args = []
 
     declared_consts : Dict[str, ASTNode_Base] = {}
+
+    declared_structs : Dict[str, Dict[str, Tuple[int, int]]] = {}
 
     def evaluate_const(exp: ASTNode_Base):
         match exp.typ:
@@ -309,33 +313,154 @@ def parse_tokens(tokens: List[Token]):
 
     def parse_load():
         tok = tokens[index]
-        assert tok.typ == TokenType.KEYWORD and tok.value in [Keyword.LOAD8, Keyword.SLOAD8, Keyword.LOAD16, Keyword.SLOAD16, Keyword.LOAD32, Keyword.SLOAD32, Keyword.LOAD64], "Shouldnt be here"
+        assert tok.typ == TokenType.KEYWORD
         expect_keyword(tok.value)
         expect_token(TokenType.OPEN_PAREN)
-        exp = parse_expression()
+        if tok.value in [Keyword.LOAD8, Keyword.SLOAD8, Keyword.LOAD16, Keyword.SLOAD16, Keyword.LOAD32, Keyword.SLOAD32, Keyword.LOAD64]:
+            sz = KW_SIZE_MAP[tok.value]
+            exp = parse_expression()
+        elif tok.value in [Keyword.LOAD, Keyword.SLOAD]:
+            sz_exp = parse_expression()
+            sz = evaluate_const(sz_exp)
+            if sz not in [8, 16, 32, 64]:
+                compiler_error(sz_exp.value.loc, "Acceptable load sizes are 8, 16, 32, and 64")
+            expect_token(TokenType.COMMA)
+            exp = parse_expression()
+        elif tok.value in [Keyword.LOADF, Keyword.SLOADF]:
+            ofs, sz = parse_struct_field()
+            expect_token(TokenType.COMMA)
+            exp = parse_expression()
+            exp = ASTNode_BinaryOp(ASTType.BINARY_OP, Token(TokenType.PLUS, tok.loc, None), exp, ASTNode_Number(ASTType.NUMBER, tok.loc, ofs))
+        else:
+            assert False, "Shouldn't be here"
         expect_token(TokenType.CLOSE_PAREN)
-        sz = KW_SIZE_MAP[tok.value]
-        return ASTNode_Load(ASTType.LOAD, tok, exp, sz, tok.value in [Keyword.SLOAD8, Keyword.SLOAD16, Keyword.SLOAD32])
+        return ASTNode_Load(ASTType.LOAD, tok, exp, sz, tok.value in [Keyword.SLOAD, Keyword.SLOADF, Keyword.SLOAD8, Keyword.SLOAD16, Keyword.SLOAD32])
 
     def parse_store():
         tok = tokens[index]
-        assert tok.typ == TokenType.KEYWORD and tok.value in [Keyword.STORE8, Keyword.STORE16, Keyword.STORE32, Keyword.STORE64], "Shouldnt be here"
+        assert tok.typ == TokenType.KEYWORD
         expect_keyword(tok.value)
         expect_token(TokenType.OPEN_PAREN)
-        exp = parse_expression()
+        if tok.value in [Keyword.STORE8, Keyword.STORE16, Keyword.STORE32, Keyword.STORE64]:
+            sz = KW_SIZE_MAP[tok.value]
+            exp = parse_expression()
+        elif tok.value == Keyword.STORE:
+            sz_exp = parse_expression()
+            sz = evaluate_const(sz_exp)
+            if sz not in [8, 16, 32, 64]:
+                compiler_error(sz_exp.value.loc, "Acceptable store sizes are 8, 16, 32, and 64")
+            expect_token(TokenType.COMMA)
+            exp = parse_expression()
+        elif tok.value in [Keyword.STOREF]:
+            ofs, sz = parse_struct_field()
+            expect_token(TokenType.COMMA)
+            exp = parse_expression()
+            exp = ASTNode_BinaryOp(ASTType.BINARY_OP, Token(TokenType.PLUS, tok.loc, None), exp, ASTNode_Number(ASTType.NUMBER, tok.loc, ofs))
+        else:
+            assert False, "Shouldn't be here"
+
         expect_token(TokenType.COMMA)
         exp2 = parse_expression()
         expect_token(TokenType.CLOSE_PAREN)
-        sz = KW_SIZE_MAP[tok.value]
         return ASTNode_Store(ASTType.STORE, tok, exp, exp2, sz)
 
     def parse_const():
         expect_keyword(Keyword.CONST)
         ident_tok = expect_token(TokenType.IDENTIFIER)
+        if ident_tok.value in declared_consts:
+            compiler_error(ident_tok.loc, f"Redefinition of existing constant {ident_tok.value}")
         expect_token(TokenType.ASSIGN)
         exp = parse_expression()
         c = evaluate_const(exp)
         declared_consts[ident_tok.value] = ASTNode_Number(ASTType.NUMBER, ident_tok, c)
+
+    def parse_struct():
+        nonlocal index
+        expect_keyword(Keyword.STRUCT)
+        ident_tok = expect_token(TokenType.IDENTIFIER)
+        if ident_tok.value in declared_structs:
+            compiler_error(ident_tok.loc, f"Redefinition of existing struct {ident_tok.value}")
+        struct = []
+        while True:
+            tok = tokens[index]
+            if tok.typ == TokenType.EOL:
+                index += 1
+                continue
+            if tok.typ == TokenType.EOF or (tok.typ == TokenType.KEYWORD and tok.value == Keyword.END):
+                break
+            field_name_tok = expect_token(TokenType.IDENTIFIER)
+            field_size_exp = parse_expression()
+            field_size = evaluate_const(field_size_exp)
+            field_name = field_name_tok.value
+            struct.append((field_name, field_size))
+            if tokens[index].typ == TokenType.SEMICOLON:
+                index += 1
+                continue
+
+        end_tok = expect_keyword(Keyword.END)
+
+        if len(struct) == 0:
+            compiler_error(end_tok.loc, "Empty structs are not permitted")
+
+        struc_dict = {}
+        offs = 0
+        for fn, fs in struct:
+            struc_dict[fn] = (offs, fs)
+            offs += fs
+        struc_dict['$end'] = offs
+        declared_structs[ident_tok.value] = struc_dict
+
+    def parse_struct_field():
+        struct_name_tok = expect_token(TokenType.IDENTIFIER)
+        struct_name = struct_name_tok.value
+
+        if struct_name not in declared_structs:
+            compiler_error(struct_name_tok.loc, f"Reference to undeclared struct '{struct_name}'")
+
+        expect_token(TokenType.PERIOD)
+
+        field_name_tok = expect_token(TokenType.IDENTIFIER)
+        field_name = field_name_tok.value
+
+        if field_name not in declared_structs[struct_name]:
+            compiler_error(field_name_tok.loc, f"Struct '{struct_name}' has no field '{field_name}'")
+        
+        return declared_structs[struct_name][field_name]
+
+    def parse_offset():
+        nonlocal index
+        tok = expect_keyword(Keyword.OFFSET)
+        expect_token(TokenType.OPEN_PAREN)
+        lhs_exp = parse_expression()
+        expect_token(TokenType.COMMA)
+
+        ofs, fs = parse_struct_field()
+
+        expect_token(TokenType.CLOSE_PAREN)
+
+        fake_add_tok = Token(TokenType.PLUS, tok.loc, None)
+
+        return ASTNode_BinaryOp(ASTType.BINARY_OP, fake_add_tok, lhs_exp, ASTNode_Number(ASTType.NUMBER, tok, ofs))
+
+    def parse_sizeof():
+        tok = expect_keyword(Keyword.SIZEOF)
+        expect_token(TokenType.OPEN_PAREN)
+        ident_tok = expect_token(TokenType.IDENTIFIER)
+        if ident_tok.value not in declared_structs:
+            compiler_error(ident_tok.loc, f"Reference to undeclared struct '{ident_tok.value}'")
+        struct_dict = declared_structs[ident_tok.value]
+        tok = tokens[index]
+        sz = struct_dict['$end']
+        if tok.typ == TokenType.PERIOD:
+            expect_token(TokenType.PERIOD)
+            field_tok = expect_token(TokenType.IDENTIFIER)
+            if field_tok.value not in struct_dict:
+                compiler_error(field_tok.loc, f"Struct '{ident_tok.value}' has no field '{field_tok.value}'")
+            sz = struct_dict[field_tok.value][1]
+        
+        expect_token(TokenType.CLOSE_PAREN)
+
+        return ASTNode_Number(ASTType.NUMBER, tok, sz)
 
     def parse_function_def():
         nonlocal index, defining_function, defining_fun_body, defining_function_args
@@ -466,10 +591,14 @@ def parse_tokens(tokens: List[Token]):
                     return parse_syscall()
                 case Keyword.BUFFER:
                     return parse_buffer_alloc()
-                case Keyword.STORE8 | Keyword.STORE16 | Keyword.STORE32 | Keyword.STORE64:
+                case Keyword.STORE | Keyword.STOREF, Keyword.STORE8 | Keyword.STORE16 | Keyword.STORE32 | Keyword.STORE64:
                     return parse_store()
-                case Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8 | Keyword.LOAD16 | Keyword.SLOAD16 | Keyword.LOAD32 | Keyword.SLOAD32:
+                case Keyword.LOAD | Keyword.SLOAD | Keyword.LOADF | Keyword.SLOADF | Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8 | Keyword.LOAD16 | Keyword.SLOAD16 | Keyword.LOAD32 | Keyword.SLOAD32:
                     return parse_load()
+                case Keyword.OFFSET:
+                    return parse_offset()
+                case Keyword.SIZEOF:
+                    return parse_sizeof()
 
         return parse_base()
 
@@ -491,7 +620,6 @@ def parse_tokens(tokens: List[Token]):
         else:
             return parse_kw()
 
-
     def parse_expression(level=0):
         if level == len(op_assoc):
             return parse_unary()
@@ -511,11 +639,12 @@ def parse_tokens(tokens: List[Token]):
     def parse_include():
         tok = expect_keyword(Keyword.INCLUDE)
         file_tok = expect_token(TokenType.STRING)
-        inc_a, inc_vars, inc_funs, inc_consts = file_to_ast(file_tok.value)
+        inc_a, inc_vars, inc_funs, inc_consts, inc_structs = file_to_ast(file_tok.value)
         ast.extend(inc_a)
         declared_vars.update(inc_vars)
         declared_funs.update(inc_funs)
         declared_consts.update(inc_consts)
+        declared_structs.update(inc_structs)
 
     def parse_statement():
         tok = tokens[index]
@@ -535,9 +664,9 @@ def parse_tokens(tokens: List[Token]):
                         return_ast = parse_while_loop()
                     case Keyword.BUFFER:
                         return_ast = parse_buffer_alloc()
-                    case Keyword.STORE8 | Keyword.STORE16 | Keyword.STORE32 | Keyword.STORE64:
+                    case Keyword.STORE | Keyword.STOREF | Keyword.STORE8 | Keyword.STORE16 | Keyword.STORE32 | Keyword.STORE64:
                         return_ast = parse_store()
-                    case Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8 | Keyword.LOAD16 | Keyword.SLOAD16 | Keyword.LOAD32 | Keyword.SLOAD32:
+                    case Keyword.LOAD | Keyword.SLOAD | Keyword.LOADF | Keyword.SLOADF | Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8 | Keyword.LOAD16 | Keyword.SLOAD16 | Keyword.LOAD32 | Keyword.SLOAD32:
                         return_ast = parse_load()
                     case Keyword.INCLUDE:
                         parse_include()
@@ -582,12 +711,14 @@ def parse_tokens(tokens: List[Token]):
                         parse_const()
                     case Keyword.INCLUDE:
                         parse_include()
+                    case Keyword.STRUCT:
+                        parse_struct()
                     case _:
                         compiler_error(tokens[index].loc, f"Unexpected keyword {tokens[index].value.name}")
             case _:
                 compiler_error(tokens[index].loc, f"Unexpected token {tokens[index].typ.name}")
     
-    return ast, declared_vars, declared_funs, declared_consts
+    return ast, declared_vars, declared_funs, declared_consts, declared_structs
 
 def print_ast(ast:ASTNode_Base, indent=0):
     indent_str = ' | ' * indent

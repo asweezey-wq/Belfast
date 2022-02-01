@@ -26,6 +26,18 @@ class Keyword(Enum):
     CONTINUE = auto()
     RETURN = auto()
 
+    STRUCT = auto()
+    SIZEOF = auto()
+    OFFSET = auto()
+
+    LOAD = auto()
+    SLOAD = auto()
+    STORE = auto()
+
+    LOADF = auto()
+    SLOADF = auto()
+    STOREF = auto()
+
     LOAD8 = auto()
     SLOAD8 = auto()
     STORE8 = auto()
@@ -81,12 +93,16 @@ KEYWORD_NAMES = {
     'return': Keyword.RETURN,
     'fun': Keyword.FUN,
     'break': Keyword.BREAK,
-    'continue': Keyword.CONTINUE
+    'continue': Keyword.CONTINUE,
+    'struct': Keyword.STRUCT
 }
 
 BUILTINS_NAMES = {
     'syscall': Keyword.SYSCALL,
     'buffer': Keyword.BUFFER,
+    'loadf': Keyword.LOADF,
+    'sloadf': Keyword.SLOADF,
+    'storef': Keyword.STOREF,
     'load64': Keyword.LOAD64,
     'store64': Keyword.STORE64,
     'load8': Keyword.LOAD8,
@@ -98,6 +114,11 @@ BUILTINS_NAMES = {
     'load32': Keyword.LOAD32,
     'sload32': Keyword.SLOAD32,
     'store32': Keyword.STORE32,
+    'load': Keyword.LOAD,
+    'sload': Keyword.SLOAD,
+    'store': Keyword.STORE,
+    'sizeof': Keyword.SIZEOF,
+    'offset': Keyword.OFFSET,
 }
 
 class TokenType(Enum):
@@ -136,6 +157,7 @@ class TokenType(Enum):
     OPEN_PAREN = auto()
     CLOSE_PAREN = auto()
     COMMA = auto()
+    PERIOD = auto()
 
 class ASTType(Enum):
     NONE = auto()
