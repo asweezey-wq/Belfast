@@ -2,20 +2,33 @@ include "stdlib.bl"
 
 const BUFCAP = 1024
 
+struct sockaddr
+    sa_family 2
+    sa_data 14
+end
+
+struct in_addr
+    s_addr 4
+end
+
+struct sockaddr_in
+    sin_family 2
+    sin_port 2
+    sin_addr sizeof(in_addr)
+    sin_zero 8
+end
+
 fun main do
     var sock_fd = socket(AF_INET, SOCK_STREAM, 0)
     if sock_fd < 0 then
         err_puts("ERROR: could not create socket\n")
         exit(1)
     end
-    var servaddr = buffer(16)
+    var servaddr = buffer(sizeof(sockaddr_in))
     memset(0, servaddr, 16)
-    store16(servaddr, AF_INET) // sin_family
-    store32(servaddr + 4, 0) // sin_addr
-    store16(servaddr + 2, 0x5000) // sin_port
-    putd(load16(servaddr))
-    putd(load32(servaddr+4))
-    putd(load16(servaddr+2))
+    storef(sockaddr_in.sin_family, servaddr, AF_INET)
+    storef(sockaddr_in.sin_addr, servaddr, 0)
+    storef(sockaddr_in.sin_port, servaddr, 0x5000)
     if bind(sock_fd, servaddr, 16) < 0 then
         err_puts("ERROR: could not bind to socket\n")
         exit(1)
@@ -27,7 +40,7 @@ fun main do
 
     puts("INFO: Listening for connections\n")
 
-    var client_addr = buffer(16)
+    var client_addr = buffer(sizeof(sockaddr))
     var client_len = buffer(4)
     var readbuf = buffer(BUFCAP)
     while 1 do

@@ -321,13 +321,14 @@ def parse_tokens(tokens: List[Token]):
             exp = parse_expression()
         elif tok.value in [Keyword.LOAD, Keyword.SLOAD]:
             sz_exp = parse_expression()
-            sz = evaluate_const(sz_exp)
+            sz = evaluate_const(sz_exp) * 8
             if sz not in [8, 16, 32, 64]:
                 compiler_error(sz_exp.value.loc, "Acceptable load sizes are 8, 16, 32, and 64")
             expect_token(TokenType.COMMA)
             exp = parse_expression()
         elif tok.value in [Keyword.LOADF, Keyword.SLOADF]:
             ofs, sz = parse_struct_field()
+            sz *= 8
             expect_token(TokenType.COMMA)
             exp = parse_expression()
             exp = ASTNode_BinaryOp(ASTType.BINARY_OP, Token(TokenType.PLUS, tok.loc, None), exp, ASTNode_Number(ASTType.NUMBER, tok.loc, ofs))
@@ -346,13 +347,14 @@ def parse_tokens(tokens: List[Token]):
             exp = parse_expression()
         elif tok.value == Keyword.STORE:
             sz_exp = parse_expression()
-            sz = evaluate_const(sz_exp)
+            sz = evaluate_const(sz_exp) * 8
             if sz not in [8, 16, 32, 64]:
                 compiler_error(sz_exp.value.loc, "Acceptable store sizes are 8, 16, 32, and 64")
             expect_token(TokenType.COMMA)
             exp = parse_expression()
         elif tok.value in [Keyword.STOREF]:
             ofs, sz = parse_struct_field()
+            sz *= 8
             expect_token(TokenType.COMMA)
             exp = parse_expression()
             exp = ASTNode_BinaryOp(ASTType.BINARY_OP, Token(TokenType.PLUS, tok.loc, None), exp, ASTNode_Number(ASTType.NUMBER, tok.loc, ofs))
