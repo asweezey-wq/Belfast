@@ -1,0 +1,7 @@
+fun main do
+    var p = buffer(8)
+    store64(p, 0)
+    var p2 = buffer(8)
+    store8(p2, 4)
+    return load64(p) + (load8(p2) ^ 0x04)
+end

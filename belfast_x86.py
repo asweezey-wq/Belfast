@@ -3,6 +3,7 @@ from re import S
 from tracemalloc import start
 from belfast_triples_opt import *
 from belfast_data import *
+import belfast_data
 from belfast_triples import TripleContext
 from belfast_variable_analysis import *
 from typing import *
@@ -296,7 +297,7 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
                                     coalesce_nodes[tref] = []
                                 coalesce_nodes[tref].append(c_w)
 
-        num_regs = len(DATA_REGISTERS) if COMPILER_SETTINGS.register_limit == 0 else COMPILER_SETTINGS.register_limit
+        num_regs = len(DATA_REGISTERS) if belfast_data.COMPILER_SETTINGS.register_limit == 0 else belfast_data.COMPILER_SETTINGS.register_limit
         register_alloc, spilled = color_interf_graph_chaitin_briggs(interf_graph, {}, precolors, num_regs, force_no_spill=(memory_register_value,) if memory_register_value else ())
 
         DO_COALESCE = True
@@ -581,7 +582,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
     code_stats.registers_used = set(trip_ctx.register_alloc.values())
 
     for t in trips:
-        if COMPILER_SETTINGS.asm_comments:
+        if belfast_data.COMPILER_SETTINGS.asm_comments:
             asm += f"  ; {print_triple(t)}\n"
         try:
             lv = t.l_val
@@ -794,7 +795,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                 case TripleType.LOAD:
                     assert t_reg is not None, "Expected this value to be assigned to a register"
                     mem_word = MEM_WORD_SIZE_MAP[t.size]
-                    instr = "movsx" if t.flags & TF_SIGNED else "movzx"
+                    instr = "mov" if t.size == 64 else ("movsx" if t.flags & TF_SIGNED else "movzx")
                     if lv.typ in [TripleValueType.REGISTER, TripleValueType.STRING_REF, TripleValueType.BUFFER_REF, TripleValueType.LOCAL_BUFFER_REF]:
                         code_stats.mov_ops += 1
                         code_stats.mem_loads += 1

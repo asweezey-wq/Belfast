@@ -1,0 +1,5 @@
+fun main do
+    var x
+    x = 4
+    return x - 4
+end

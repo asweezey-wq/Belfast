@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os, sys
 from belfast_data import *
+import belfast_data
 from belfast_triples import *
 from belfast_triples_opt import OPTIMIZATION_FLAGS, optimize_triples
 from belfast_x86 import convert_function_to_asm, get_asm_header, get_asm_footer, optimize_x86, output_x86_trips_to_str
@@ -8,7 +9,7 @@ import re
 
 keyword_regex = r'(?:(' + ('|'.join(KEYWORD_NAMES.keys())) + r')(?=\s|$|;))'
 builtins_regex = r'(' + ('|'.join(BUILTINS_NAMES.keys())) + r')'
-lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|(-?[0-9]+)|(\|\||&&|<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^!~])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
+lang_regex = keyword_regex + r'|' + builtins_regex + r'|(0x[a-fA-F0-9]+)|(".*")|(\'(?:.|\\[nt0])\')|((?:(?<=\s)-)?[0-9]+)|(\|\||&&|<<|>>|[<>!=]=|[\+\-\*\/\;\(\)\%\>\<\=\,\&\|\^!~])|([_A-Za-z][_A-Za-z0-9]*)|(\S+)'
 # print(lang_regex)
 regex_type_map = [
     TokenType.KEYWORD,
@@ -666,52 +667,8 @@ def file_to_ast(filename: str):
     toks = tokenize_string(os.path.abspath(filename), code_str)
     return parse_tokens(toks)
 
-import argparse
-
-if __name__ == '__main__':
-    argp = argparse.ArgumentParser(description='The Belfast Compiler')
-    argp.add_argument('file', help='The file input to the compiler')
-    argp.add_argument('-o', '--output', dest='output', help='The output assembly file', default='prog.asm')
-    argp.add_argument('-c', '--do-comments', dest='do_comments', action='store_true', help='Turn off the comments generated in assembly')
-    argp.add_argument('-ir', '--ir-only', dest='ir_only', action='store_true', help='Only generate the IR code, not the assembly')
-    argp.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='Enable verbose mode')
-    argp.add_argument('-nc', '--no-const', dest='no_const', action='store_true', help='Disable constant propagation')
-    argp.add_argument('-reg', '--registers', dest='registers', action='store', help='Set the limit on the number of registers', default='0')
-    argp.add_argument('-r', '--run', dest='run', action='store_true', help='Compile and run the program')
-    argp.add_argument('-s', '--stat', dest='stat', help='Stat the code generation')
-    args = argp.parse_args()
-
-    filename = args.file
-
-    if args.do_comments:
-        COMPILER_SETTINGS.asm_comments = True
-    
-    if args.verbose:
-        COMPILER_SETTINGS.verbose = 1
-
-    if args.ir_only:
-        COMPILER_SETTINGS.generate_asm = False
-
-    if args.no_const:
-        COMPILER_SETTINGS.const_propagation = False
-
-    try:
-        COMPILER_SETTINGS.register_limit = int(args.registers)
-        if 0 < COMPILER_SETTINGS.register_limit <= 7:
-            print("ERROR: x86 architectures must use at least 8 registers", file=sys.stderr)
-            sys.exit(1)
-    except ValueError:
-        print('ERROR: Register limit must be a number', file=sys.stderr)
-        sys.exit(1)
-
-    COMPILER_SETTINGS.output_filename = args.output
-
-    OPTIMIZATION_FLAGS['const-eval'] = COMPILER_SETTINGS.const_propagation
-    OPTIMIZATION_FLAGS['value-forwarding'] = COMPILER_SETTINGS.const_propagation
-
+def compile(filename: str, do_stat=None):
     ast = file_to_ast(filename)[0]
-    # for a in ast:
-    #     print_ast(a)
     
     trips, trip_ctx = triples_parse_program(ast)
 
@@ -739,7 +696,7 @@ if __name__ == '__main__':
         index_triples(f_trips)
         for t in f_trips:
             prog_tripstr += f"{print_triple(t)}\n"
-        if COMPILER_SETTINGS.generate_asm:
+        if belfast_data.COMPILER_SETTINGS.generate_asm:
             f_trips = optimize_x86(f_trips, fun_ctx)
             x86_tripstr += f"FUNCTION {f_name}\n"
             x86_tripstr += output_x86_trips_to_str(f_trips, fun_ctx)
@@ -749,51 +706,101 @@ if __name__ == '__main__':
             stats[f_name] = stat
         prog_tripstr += "\n"
 
-    if COMPILER_SETTINGS.verbose >= 1:
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
         print("[INFO] Compiled successfully")
 
-    if COMPILER_SETTINGS.generate_tripstr:
-        with open('prog.tripstr', 'w') as f:
+    if belfast_data.COMPILER_SETTINGS.generate_tripstr:
+        with open(belfast_data.COMPILER_SETTINGS.tripstr_filename, 'w') as f:
             f.write(prog_tripstr)
-        with open('prog_x86.tripstr', 'w') as f:
+        with open(belfast_data.COMPILER_SETTINGS.tripstr_filename + '.x86', 'w') as f:
             f.write(x86_tripstr)
 
     
-    if COMPILER_SETTINGS.generate_asm:
+    if belfast_data.COMPILER_SETTINGS.generate_asm:
         asm += get_asm_footer(trip_ctx, called_funs)
-        with open(args.output, 'w') as f_asm:
+        with open(belfast_data.COMPILER_SETTINGS.output_filename, 'w') as f_asm:
             f_asm.write(asm)
 
-    if args.stat:
-        if args.stat in ['1', '2']:
+    if do_stat:
+        if do_stat in ['1', '2']:
             for f_name, stat in stats.items():
                 print(f"[STAT] [{f_name}]: Score: {evaluate_stat_score(stat)}")
                 print(f"[STAT] [{f_name}]: Registers Used: {len(stat.registers_used)}")
-                if args.stat in ['2',]:
+                if do_stat in ['2',]:
                     print('\n'.join([f"               {k}: {v}" for k,v in asdict(stat).items()]))
         else:
             print("ERROR: stat argument should be '1' or '2'", file=sys.stderr)
             sys.exit(1)
 
-    if args.run:
-        if not COMPILER_SETTINGS.generate_asm:
-            print("ERROR: You must enable x86 aseembly generation to run the program", file=sys.stderr)
+def build_executable():
+    if not belfast_data.COMPILER_SETTINGS.generate_asm:
+        print("ERROR: You must enable x86 aseembly generation to run the program", file=sys.stderr)
+        sys.exit(1)
+    
+    cmd = f"nasm -fmacho64 {belfast_data.COMPILER_SETTINGS.output_filename} -o a.out.o"
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[INFO] Executing '{cmd}'")
+    os.system(cmd)
+    cmd = f"ld -lSystem -L$(xcode-select -p)/SDKs/MacOSX.sdk/usr/lib a.out.o -o a.out"
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[INFO] Executing '{cmd}'")
+    os.system(cmd)
+    cmd = f"rm a.out.o 2>/dev/null"
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[INFO] Executing '{cmd}'")
+    os.system(cmd)
+
+import argparse
+
+if __name__ == '__main__':
+    argp = argparse.ArgumentParser(description='The Belfast Compiler')
+    argp.add_argument('file', help='The file input to the compiler')
+    argp.add_argument('-o', '--output', dest='output', help='The output assembly file', default='prog.asm')
+    argp.add_argument('-c', '--do-comments', dest='do_comments', action='store_true', help='Turn off the comments generated in assembly')
+    argp.add_argument('-ir', '--ir-only', dest='ir_only', action='store_true', help='Only generate the IR code, not the assembly')
+    argp.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='Enable verbose mode')
+    argp.add_argument('-nc', '--no-const', dest='no_const', action='store_true', help='Disable constant propagation')
+    argp.add_argument('-reg', '--registers', dest='registers', action='store', help='Set the limit on the number of registers', default='0')
+    argp.add_argument('-r', '--run', dest='run', action='store_true', help='Compile and run the program')
+    argp.add_argument('-s', '--stat', dest='stat', help='Stat the code generation')
+    args = argp.parse_args()
+
+    filename = args.file
+
+    belfast_data.COMPILER_SETTINGS = CompilerSettings()
+
+    if args.do_comments:
+        belfast_data.COMPILER_SETTINGS.asm_comments = True
+    
+    if args.verbose:
+        belfast_data.COMPILER_SETTINGS.verbose = 1
+
+    if args.ir_only:
+        belfast_data.COMPILER_SETTINGS.generate_asm = False
+
+    if args.no_const:
+        belfast_data.COMPILER_SETTINGS.const_propagation = False
+
+    try:
+        belfast_data.COMPILER_SETTINGS.register_limit = int(args.registers)
+        if 0 < belfast_data.COMPILER_SETTINGS.register_limit <= 7:
+            print("ERROR: x86 architectures must use at least 8 registers", file=sys.stderr)
             sys.exit(1)
-        
-        cmd = f"nasm -fmacho64 {args.output} -o a.out.o"
-        if COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO] Executing '{cmd}'")
-        os.system(cmd)
-        cmd = f"ld -lSystem -L$(xcode-select -p)/SDKs/MacOSX.sdk/usr/lib a.out.o -o a.out"
-        if COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO] Executing '{cmd}'")
-        os.system(cmd)
-        cmd = f"rm a.out.o 2>/dev/null"
-        if COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO] Executing '{cmd}'")
-        os.system(cmd)
+    except ValueError:
+        print('ERROR: Register limit must be a number', file=sys.stderr)
+        sys.exit(1)
+
+    belfast_data.COMPILER_SETTINGS.output_filename = args.output
+
+    OPTIMIZATION_FLAGS['const-eval'] = belfast_data.COMPILER_SETTINGS.const_propagation
+    OPTIMIZATION_FLAGS['value-forwarding'] = belfast_data.COMPILER_SETTINGS.const_propagation
+
+    compile(filename, do_stat=args.stat)
+
+    if args.run:
+        build_executable()
         cmd = f"./a.out"
-        if COMPILER_SETTINGS.verbose >= 1:
+        if belfast_data.COMPILER_SETTINGS.verbose >= 1:
             print(f"[INFO] Executing '{cmd}'")
         os.system(cmd)
 

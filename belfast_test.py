@@ -1,73 +1,54 @@
-from cgi import test
-from cmath import exp
 import sys, os
 import subprocess
+from belfast_data import *
+import belfast
+import belfast_triples_opt
+from belfast_triples_opt import OPTIMIZATION_FLAGS, OPTIMIZATION_FLAGS_DEFAULTS
 
 def run_test(testfile):
-    cases = []
-    bl_file = ''
-    with open(testfile) as f:
-        bl_file = f.readline().strip()
-        bl_file = '/'.join(testfile.split('/')[:-1]) + '/' + bl_file
-    
-        rest = f.readlines()
-        idx = 0
-        while idx < len(rest):
-            l = rest[idx].strip()
-            idx += 1
-            if len(l) == 0:
-                continue
-            if l != 'CASE':
-                print(f"Invalid test file", file=sys.stderr)
-                sys.exit(1)
-            
-            ins = []
-            while idx < len(rest):
-                in_l = rest[idx].strip()
-                if in_l.startswith('IN '):
-                    idx += 1
-                    ins.append(int(in_l[3:]))
-                else:
-                    break
-            
-            outs = []
-            while idx < len(rest):
-                out_l = rest[idx].strip()
-                if out_l.startswith('OUT '):
-                    idx += 1
-                    outs.append(out_l[4:])
-                else:
-                    break
-
-            if len(ins) != 0 or len(outs) != 0:
-                cases.append((ins, outs))
-            else:
-                print('Case with no ins or outs', file=sys.stderr)
-                sys.exit(1)
-
-    succeeded = True
-    for i,o in cases:
-        cmd = f"python3 belfast.py {bl_file} -r " + ' '.join(map(str, i))
-        print(f"[CMD] {cmd}")
-        com = subprocess.run(cmd.split(), capture_output=True)
-        expected_out = ''
-        for o_i in o:
-            expected_out += str(o_i) + '\n'
-        actual_out = com.stdout.decode('utf-8')
-        if com.returncode != 0 or actual_out != expected_out:
-            print(f"[ERROR] Unexpected output")
-            print(f"  Expected: \n{expected_out}")
-            print(f"  Actual: \n{actual_out}")
-            succeeded = False
-    
-    if succeeded:
+    global COMPILER_SETTINGS, OPTIMIZATION_FLAGS
+    output_filename = testfile + '.expected'
+    expected_out = ''
+    try:
+        with open(output_filename, 'r') as f:
+            expected_out = f.read()
+    except FileNotFoundError:
+        pass
+    c = CompilerSettings()
+    c.tripstr_filename = f'./tests/tripstr/{testfile.split("/")[-1][:-3]}.tripstr'
+    c.output_filename = 'a.out.asm'
+    belfast.set_compiler_settings(c)
+    belfast_triples_opt.set_opt_flags(OPTIMIZATION_FLAGS_DEFAULTS)
+    print(f"[INFO] Compiling {testfile}")
+    belfast.compile(testfile)
+    # print(f"[INFO] Building and linking asm")
+    belfast.build_executable()
+    # print(f"[CMD] ./a.out")
+    com = subprocess.run("./a.out", capture_output=True)
+    actual_out = com.stdout.decode('utf-8')
+    if actual_out != expected_out:
+        print(f"[ERROR] Unexpected output")
+        print(f"  Expected: \n{expected_out}")
+        print(f"  Actual: \n{actual_out}")
+        return False
+    elif com.returncode != 0:
+        print(f"[ERROR] Expected 0 return code, got {com.returncode}")
+        return False
+    else:
         print(f'[PASS] {testfile}')
-
-    return succeeded
-        
+        return True        
 
 
 if __name__ == '__main__':
+    failed = 0
+    all_tests = []
     for entry in os.scandir('tests'):
-        if entry.is_file() and entry.path.endswith('.bltest'):
-            run_test(entry.path)
+        if entry.is_file() and entry.path.endswith('.bl'):
+            all_tests.append(entry.path)
+    for t in sorted(all_tests):
+        if not run_test(t):
+            failed += 1
+    if failed > 0:
+        print(f"\n[INFO] {failed} tests failed")
+    else:
+        print(f"\n[INFO] All tests passed")

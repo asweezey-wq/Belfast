@@ -452,13 +452,18 @@ MEM_WORD_SIZE_MAP = {
 class CompilerSettings:
     output_filename: str = ''
     generate_tripstr: bool = True
+    tripstr_filename: str = 'prog.tripstr'
     generate_asm: bool = True
     verbose: int = 0
     asm_comments: bool = False
     register_limit: int = 0
     const_propagation: bool = True
 
-COMPILER_SETTINGS = CompilerSettings()
+COMPILER_SETTINGS = None
+
+def set_compiler_settings(c: CompilerSettings):
+    global COMPILER_SETTINGS
+    COMPILER_SETTINGS = c
 
 @dataclass
 class CodeScoreStat:

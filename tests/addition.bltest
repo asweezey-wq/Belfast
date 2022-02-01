@@ -1,9 +1,0 @@
-addition.bl
-CASE
-    OUT 3
-    OUT 0
-    OUT 13
-    OUT 1
-    OUT 0
-    OUT 16
-    OUT 40

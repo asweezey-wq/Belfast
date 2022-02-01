@@ -1,11 +1,9 @@
-from os import remove
-from re import T
-from tkinter import E
+import belfast_data
 from belfast_triples import *
 from typing import *
 from math import log2
 
-OPTIMIZATION_FLAGS = {
+OPTIMIZATION_FLAGS_DEFAULTS = {
     'const-eval': True,
     'unused-code': True,
     'cmp-forward': True,
@@ -16,6 +14,12 @@ OPTIMIZATION_FLAGS = {
     "loop-optimization": True,
     'value-simplification': True,
 }
+
+OPTIMIZATION_FLAGS = dict(OPTIMIZATION_FLAGS_DEFAULTS)
+
+def set_opt_flags(f: dict):
+    global OPTIMIZATION_FLAGS
+    OPTIMIZATION_FLAGS = f
 
 REMOVAL_HINTS = {}
 ADD_HINTS = {}
@@ -784,7 +788,7 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
 
     prev_trips: List[Triple] = None
 
-    if COMPILER_SETTINGS.generate_tripstr:
+    if belfast_data.COMPILER_SETTINGS.generate_tripstr:
         with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'w') as f:
             for t in trips:
                 f.write(f"{print_triple(t)}\n")
@@ -797,7 +801,7 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
         label_references: Dict[Triple, List[Triple]] = {}
         for t in filter(lambda x: x.typ == TripleType.LABEL, trips):
             label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, trips))
-        if COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
+        if belfast_data.COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
             d = get_triple_delta(prev_trips, trips)
             output_triple_delta_to_file(d, f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr")
             with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'a') as f:
