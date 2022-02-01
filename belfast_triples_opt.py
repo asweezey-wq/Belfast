@@ -246,6 +246,14 @@ def branch_const_eval_pass(triples: List[Triple], triple_references: Dict[Triple
                     REMOVAL_HINTS[t] = "Branch constant eval"
                 else:
                     items_to_remove.append(t)
+            elif t.op == Operator.EQ:
+                if n != 0:
+                    t.typ = TripleType.GOTO
+                    t.l_val = t.r_val
+                    t.r_val = None
+                    REMOVAL_HINTS[t] = "Branch constant eval"
+                else:
+                    items_to_remove.append(t)
             else:
                 assert False, f"Unknown Operator {t.op.name}"
     for t in items_to_remove:

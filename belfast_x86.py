@@ -624,20 +624,30 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     should_be_same_inout = t.op not in [Operator.MODULUS, Operator.PLUS] + list(CMP_OP_INSTR_MAP.keys())
                     switch_lr = False
                     if t.op != Operator.PLUS:
-                        if t_reg is not None and (lv.typ in [TripleValueType.CONSTANT] or (lv.typ == TripleValueType.REGISTER and should_be_same_inout and lv.value != t_reg)):
-                            if should_be_same_inout and rv.typ == TripleValueType.REGISTER and rv.value == t_reg:
-                                if t.op in [Operator.PLUS,Operator.BITWISE_AND, Operator.BITWISE_OR, Operator.BITWISE_XOR]:
-                                    switch_lr = True
+                        if (lv.typ in [TripleValueType.CONSTANT] or (lv.typ == TripleValueType.REGISTER and t_reg is not None and should_be_same_inout and lv.value != t_reg)):
+                            if t_reg is not None:
+                                if should_be_same_inout and rv.typ == TripleValueType.REGISTER and rv.value == t_reg:
+                                    if t.op in [Operator.PLUS,Operator.BITWISE_AND, Operator.BITWISE_OR, Operator.BITWISE_XOR]:
+                                        switch_lr = True
+                                    else:
+                                        code_stats.basic_ops += 2
+                                        write_asm(f"xchg {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
+                                        temp = rv
+                                        rv = lv
+                                        lv = temp
                                 else:
-                                    code_stats.basic_ops += 2
-                                    write_asm(f"xchg {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
-                                    temp = rv
-                                    rv = lv
-                                    lv = temp
+                                    stat_move(lv, code_stats)
+                                    write_asm(move_instr(t_reg, lv, trip_ctx))
+                                    lv = TripleValue(TripleValueType.REGISTER, t_reg)
                             else:
-                                stat_move(lv, code_stats)
-                                write_asm(move_instr(t_reg, lv, trip_ctx))
-                                lv = TripleValue(TripleValueType.REGISTER, t_reg)
+                                if t.op in CMP_OP_INSTR_MAP:
+                                    if rv.typ == TripleValueType.REGISTER:
+                                        switch_lr = True
+                                    else:
+                                        assert False
+                                else:
+                                    assert False
+                                    
                         if lv.typ == TripleValueType.ON_STACK:
                             # TODO: Binary operators can handle stack values 
                             if t_reg is not None:
@@ -682,6 +692,11 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                                 write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(rv, trip_ctx)}")
                         case Operator.GE | Operator.LE | Operator.GT | Operator.LT | Operator.NE | Operator.EQ:
                             assert t_reg is not None or (t.flags & TF_BOOL_FORWARDED) > 0, "Expected this value to be assigned to a register or forwarded to next operation"
+                            if switch_lr:
+                                t.op = FLIP_CMP_OP[t.op]
+                                temp = lv
+                                lv = rv
+                                rv = temp
                             if t_reg is not None:
                                 code_stats.basic_ops += 2
                                 code_stats.mov_ops += 1

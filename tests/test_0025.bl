@@ -1,0 +1,6 @@
+include "stdlib.bl"
+
+fun main do
+    var s = "hello"
+    return strlen(s) - 5
+end

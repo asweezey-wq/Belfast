@@ -441,6 +441,14 @@ INVERT_CMP_OP = {
     Operator.EQ: Operator.NE,
     Operator.NE: Operator.EQ,
 }
+FLIP_CMP_OP = {
+    Operator.GE: Operator.LE,
+    Operator.GT: Operator.LT,
+    Operator.LE: Operator.GE,
+    Operator.LT: Operator.GT,
+    Operator.EQ: Operator.EQ,
+    Operator.NE: Operator.NE,
+}
 MEM_WORD_SIZE_MAP = {
     8: 'byte',
     16: 'word',

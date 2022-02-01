@@ -1,0 +1,15 @@
+fun main do
+    var x = 1
+    x = 10
+    while x do
+        x = x - 1
+    end
+    if x then
+        return 1
+    end
+    x = 10
+    while x do
+        x = x - 1
+    end
+    return x
+end

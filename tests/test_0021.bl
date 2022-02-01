@@ -1,0 +1,7 @@
+fun foo a b do
+    return 2 + a - b
+end
+
+fun main do
+    return foo(1, 3)
+end

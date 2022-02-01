@@ -1,0 +1,5 @@
+fun main do
+    var x = 50
+    // TODO: do-while loop
+    return x - 50
+end

@@ -1,3 +1,4 @@
+// These tests are taken from https://github.com/c-testsuite/c-testsuite/tree/master/tests/single-exec
 fun main do
     return 0
 end

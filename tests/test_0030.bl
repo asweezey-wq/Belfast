@@ -1,0 +1,22 @@
+fun f do
+    return 100
+end
+
+fun main do
+    if f() > 1000 then
+        return 1
+    end
+    if f() >= 1000 then
+        return 1
+    end
+    if 1000 < f() then
+        return 1
+    end
+    if 1000 == f() then
+        return 1
+    end
+    if 100 != f() then
+        return 1
+    end
+    return 0
+end

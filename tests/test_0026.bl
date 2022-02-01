@@ -1,0 +1,4 @@
+fun main do
+    var s = "hello"
+    return load8(s) - 104
+end

@@ -1,0 +1,20 @@
+fun main do
+    var x = 0
+    var p = buffer(8)
+    var p2 = buffer(1)
+    store64(p, p2)
+    store8(p2, x)
+    var l = load8(load64(p))
+    if l then return 1; end
+    if load8(p2) then 
+        return 1;
+    else
+        store8(load64(p), 1)
+    end
+    x = load8(p2)
+    if x then
+        return 0
+    else
+        return 1
+    end
+end

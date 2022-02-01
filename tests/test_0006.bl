@@ -1,0 +1,7 @@
+fun main do
+    var x = 50
+    while x do
+        x = x - 1
+    end
+    return x
+end

@@ -1,0 +1,39 @@
+fun effect g do
+    store8(g, 1)
+    return 1
+end
+
+fun main do
+    var x = 0
+    var g = buffer(1)
+    store8(g, 0)
+    if x && effect(g) then
+        return 1
+    end
+    if load8(g) then
+        return 2
+    end
+    x = 1
+    if x && effect(g) then
+        if load8(g) != 1 then return 3; end
+    else
+        return 4
+    end
+    store8(g, 0)
+    x = 1
+    if x || effect(g) then
+        if load8(g) then
+            return 5;
+        end
+    else return 6; end
+    
+    x = 0
+    if x || effect(g) then
+        if load8(g) != 1 then
+            return 7;
+        end
+    else
+        return 8;
+    end
+    return 0
+end
