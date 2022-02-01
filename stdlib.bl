@@ -21,6 +21,24 @@ fun putd d do
     syscall(0x2000004, 1, putd_buf + (32 - putd_cnt), putd_cnt)
 end
 
+fun putu d do
+    var buf = buffer(32)
+    store8(buf+31, 0x0A)
+    var cnt = 1;
+    if d != 0 then
+        while d > 0 do
+            store8(buf+(31-cnt), 0x30 + (d % 10))
+            d = d / 10
+            cnt = cnt + 1
+        end
+    else
+        cnt = 2;
+        store8(buf+30, 0x30)
+    end
+
+    syscall(0x2000004, 1, buf + (32 - cnt), cnt)
+end
+
 fun puth h do
     var buf = buffer(32)
     var hex = "0123456789ABCDEF"
@@ -56,6 +74,14 @@ fun strlen s do
     return cnt
 end
 
+fun memset val ptr len do
+    var i = 0
+    while i < len do
+        store8(ptr, val)
+        ptr = ptr + 1
+    end
+end
+
 const STDOUT_FILENO = 1;
 const STDIN_FILENO = 1;
 const STDERR_FILENO = 2;
@@ -64,11 +90,17 @@ fun puts s do
     syscall(0x2000004, STDOUT_FILENO, s, strlen(s))
 end
 
+fun err_puts s do
+    syscall(0x2000004, STDERR_FILENO, s, strlen(s))
+end
+
 fun putc c do
     var cbuf = buffer(1)
     store8(cbuf, c)
     syscall(0x2000004, STDOUT_FILENO, cbuf, 1)
 end
+
+const SYSCALL_EXIT = 0x2000001
 
 const SYSCALL_READ = 0x2000003;
 const SYSCALL_WRITE = 0x2000004;
@@ -77,6 +109,12 @@ const SYSCALL_OPEN = 0x2000005;
 const SYSCALL_CLOSE = 0x2000006;
 
 const SYSCALL_LSEEK = 0x20000C7;
+
+const SYSCALL_SOCKET = 0x2000000 + 97;
+const SYSCALL_CONNECT = 0x2000000 + 98;
+const SYSCALL_BIND = 0x2000000 + 104;
+const SYSCALL_LISTEN = 0x2000000 + 106;
+const SYSCALL_ACCEPT = 0x2000000 + 30;
 
 const O_RDONLY = 0x0000;
 const O_WRONLY = 0x0001;
@@ -102,6 +140,10 @@ const S_IRWXO = 7; // 70 octal    | RWX mask for other
 const S_IROTH = 4; // 40 octal    | R for other
 const S_IWOTH = 2; // 20 octal    | W for other
 const S_IXOTH = 1; // 10 octal    | X for other
+
+fun exit i do
+    syscall(SYSCALL_EXIT, i)
+end
 
 fun open filepath mode flags do
     return syscall(SYSCALL_OPEN, filepath, mode, flags)
@@ -159,4 +201,29 @@ fun read_until fd delim buf buflen do
         i = i + 1
     end
     return b_read
+end
+
+// Sockets
+
+const AF_INET = 2
+const SOCK_STREAM = 1
+
+fun socket domain typ protocol do
+    return syscall(SYSCALL_SOCKET, domain, typ, protocol)
+end
+
+fun connect s name namelen do
+    return syscall(SYSCALL_CONNECT, s, name, namelen)
+end
+
+fun listen s backlog do
+    return syscall(SYSCALL_LISTEN, s, backlog)
+end
+
+fun bind s name namelen do
+    return syscall(SYSCALL_BIND, s, name, namelen)
+end
+
+fun accept s name namelen do
+    return syscall(SYSCALL_ACCEPT, s, name, namelen)
 end

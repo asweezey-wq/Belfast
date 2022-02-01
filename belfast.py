@@ -309,17 +309,17 @@ def parse_tokens(tokens: List[Token]):
 
     def parse_load():
         tok = tokens[index]
-        assert tok.typ == TokenType.KEYWORD and tok.value in [Keyword.LOAD8, Keyword.SLOAD8, Keyword.LOAD64], "Shouldnt be here"
+        assert tok.typ == TokenType.KEYWORD and tok.value in [Keyword.LOAD8, Keyword.SLOAD8, Keyword.LOAD16, Keyword.SLOAD16, Keyword.LOAD32, Keyword.SLOAD32, Keyword.LOAD64], "Shouldnt be here"
         expect_keyword(tok.value)
         expect_token(TokenType.OPEN_PAREN)
         exp = parse_expression()
         expect_token(TokenType.CLOSE_PAREN)
         sz = KW_SIZE_MAP[tok.value]
-        return ASTNode_Load(ASTType.LOAD, tok, exp, sz, tok.value == Keyword.SLOAD8)
+        return ASTNode_Load(ASTType.LOAD, tok, exp, sz, tok.value in [Keyword.SLOAD8, Keyword.SLOAD16, Keyword.SLOAD32])
 
     def parse_store():
         tok = tokens[index]
-        assert tok.typ == TokenType.KEYWORD and tok.value in [Keyword.STORE8, Keyword.STORE64], "Shouldnt be here"
+        assert tok.typ == TokenType.KEYWORD and tok.value in [Keyword.STORE8, Keyword.STORE16, Keyword.STORE32, Keyword.STORE64], "Shouldnt be here"
         expect_keyword(tok.value)
         expect_token(TokenType.OPEN_PAREN)
         exp = parse_expression()
@@ -334,7 +334,8 @@ def parse_tokens(tokens: List[Token]):
         ident_tok = expect_token(TokenType.IDENTIFIER)
         expect_token(TokenType.ASSIGN)
         exp = parse_expression()
-        declared_consts[ident_tok.value] = exp
+        c = evaluate_const(exp)
+        declared_consts[ident_tok.value] = ASTNode_Number(ASTType.NUMBER, ident_tok, c)
 
     def parse_function_def():
         nonlocal index, defining_function, defining_fun_body, defining_function_args
@@ -465,9 +466,9 @@ def parse_tokens(tokens: List[Token]):
                     return parse_syscall()
                 case Keyword.BUFFER:
                     return parse_buffer_alloc()
-                case Keyword.STORE8 | Keyword.STORE64:
+                case Keyword.STORE8 | Keyword.STORE16 | Keyword.STORE32 | Keyword.STORE64:
                     return parse_store()
-                case Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8:
+                case Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8 | Keyword.LOAD16 | Keyword.SLOAD16 | Keyword.LOAD32 | Keyword.SLOAD32:
                     return parse_load()
 
         return parse_base()
@@ -534,9 +535,9 @@ def parse_tokens(tokens: List[Token]):
                         return_ast = parse_while_loop()
                     case Keyword.BUFFER:
                         return_ast = parse_buffer_alloc()
-                    case Keyword.STORE8 | Keyword.STORE64:
+                    case Keyword.STORE8 | Keyword.STORE16 | Keyword.STORE32 | Keyword.STORE64:
                         return_ast = parse_store()
-                    case Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8:
+                    case Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8 | Keyword.LOAD16 | Keyword.SLOAD16 | Keyword.LOAD32 | Keyword.SLOAD32:
                         return_ast = parse_load()
                     case Keyword.INCLUDE:
                         parse_include()

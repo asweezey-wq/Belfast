@@ -1,0 +1,59 @@
+include "stdlib.bl"
+
+const BUFCAP = 1024
+
+fun main do
+    var sock_fd = socket(AF_INET, SOCK_STREAM, 0)
+    if sock_fd < 0 then
+        err_puts("ERROR: could not create socket\n")
+        exit(1)
+    end
+    var servaddr = buffer(16)
+    memset(0, servaddr, 16)
+    store16(servaddr, AF_INET) // sin_family
+    store32(servaddr + 4, 0) // sin_addr
+    store16(servaddr + 2, 0x5000) // sin_port
+    putd(load16(servaddr))
+    putd(load32(servaddr+4))
+    putd(load16(servaddr+2))
+    if bind(sock_fd, servaddr, 16) < 0 then
+        err_puts("ERROR: could not bind to socket\n")
+        exit(1)
+    end
+    if listen(sock_fd, 5) != 0 then
+        err_puts("ERROR: could not listen on socket\n")
+        exit(1)
+    end
+
+    puts("INFO: Listening for connections\n")
+
+    var client_addr = buffer(16)
+    var client_len = buffer(4)
+    var readbuf = buffer(BUFCAP)
+    while 1 do
+        puts("Waiting to accept...\n")
+        var cl_fd = accept(sock_fd, client_addr, client_len)
+        puts("Accepted\n")
+        if cl_fd < 0 then
+            err_puts("ERROR: could not accept client\n")
+            exit(1)
+        end
+
+        var bytes_read = read(cl_fd, readbuf, BUFCAP)
+        puts(readbuf)
+
+        var resp = "HTTP/1.1 200 OK\r\n"
+        write(cl_fd, resp, strlen(resp))
+
+        write(cl_fd, "\r\n", 2)
+
+        var body = "This is a body\r\n"
+        write(cl_fd, body, strlen(body))
+
+        close(cl_fd)
+    end
+
+    close(sock_fd)
+
+    return 0
+end

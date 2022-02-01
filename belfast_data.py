@@ -30,6 +30,14 @@ class Keyword(Enum):
     SLOAD8 = auto()
     STORE8 = auto()
 
+    LOAD16 = auto()
+    SLOAD16 = auto()
+    STORE16 = auto()
+
+    LOAD32 = auto()
+    SLOAD32 = auto()
+    STORE32 = auto()
+
     LOAD64 = auto()
     STORE64 = auto()
 
@@ -84,6 +92,12 @@ BUILTINS_NAMES = {
     'load8': Keyword.LOAD8,
     'sload8': Keyword.SLOAD8,
     'store8': Keyword.STORE8,
+    'load16': Keyword.LOAD16,
+    'sload16': Keyword.SLOAD16,
+    'store16': Keyword.STORE16,
+    'load32': Keyword.LOAD32,
+    'sload32': Keyword.SLOAD32,
+    'store32': Keyword.STORE32,
 }
 
 class TokenType(Enum):
@@ -251,6 +265,12 @@ KW_SIZE_MAP = {
     Keyword.LOAD8:      8,
     Keyword.SLOAD8:     8,
     Keyword.STORE8:     8,
+    Keyword.LOAD16:      16,
+    Keyword.SLOAD16:     16,
+    Keyword.STORE16:     16,
+    Keyword.LOAD32:      32,
+    Keyword.SLOAD32:     32,
+    Keyword.STORE32:     32,
     Keyword.LOAD64:     64,
     Keyword.STORE64:    64,
 }
@@ -396,6 +416,46 @@ registers = [
     'r15',
 ]
 
+dword_registers = [
+    'error',
+    'eax',
+    'ebx',
+    'ecx',
+    'edx',
+    'esi',
+    'edi',
+    'ebp',
+    'esp',
+    'r8d',
+    'r9d',
+    'r10d',
+    'r11d',
+    'r12d',
+    'r13d',
+    'r14d',
+    'r15d',
+]
+
+word_registers = [
+    'error',
+    'ax',
+    'bx',
+    'cx',
+    'dx',
+    'si',
+    'di',
+    'bp',
+    'sp',
+    'r8w',
+    'r9w',
+    'r10w',
+    'r11w',
+    'r12w',
+    'r13w',
+    'r14w',
+    'r15w',
+]
+
 byte_registers = [
     'error',
     'al',
@@ -425,6 +485,10 @@ CALLEE_SAVED_REG = [2, 7, 13, 14, 15, 16]
 def reg_str_for_size(index:int, size:int=64):
     if size == 64:
         return registers[index]
+    elif size == 32:
+        return dword_registers[index]
+    elif size == 16:
+        return word_registers[index]
     elif size == 8:
         return byte_registers[index]
     else:
