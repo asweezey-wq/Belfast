@@ -2,6 +2,9 @@ tripstr/
 .vscode/
 __pycache__
 *.tripstr
+*.tripstr.x86
+a.out
+test
 *.s
 *.c
 *.asm

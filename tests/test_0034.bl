@@ -1,0 +1,27 @@
+fun main do
+    var x = 0
+    while 1 do 
+        break
+    end
+    while 1 do
+        if x == 5 then
+            break
+        end
+        x = x + 1
+        continue
+    end
+    while 1 do
+        if x == 10 then
+            break
+        end
+        x = x + 1
+        continue
+    end
+    while 1 do
+        if x == 15 then
+            break
+        end
+        x = x + 1
+    end
+    return x - 15
+end

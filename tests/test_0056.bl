@@ -1,0 +1,17 @@
+include "stdlib.bl"
+
+fun main do
+    var a = 42
+    putd(a)
+
+    var b = 64
+    putd(b)
+
+    var c = 12
+    putd(c)
+
+    var d = -34
+    putd(d)
+
+    return 0
+end

@@ -1,0 +1,26 @@
+fun main do
+    var n;
+    var t;
+    var c;
+    var p;
+    c = 0
+    n = 2
+    while n < 5000 do
+        t = 2
+        p = 1
+        while t*t <= n do
+            if n % t == 0 then
+                p = 0
+            end
+            t = t + 1
+        end
+        n = n + 1
+        if p then
+            c = c + 1
+        end
+    end
+    if c != 669 then
+        return 1
+    end
+    return 0
+end

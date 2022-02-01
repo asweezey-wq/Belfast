@@ -1,0 +1,17 @@
+fun main do
+    var x = 0
+    x = x + 2
+    x = x + 2
+    if x != 4 then
+        return 1
+    end
+    x = x - 1
+    if x != 3 then
+        return 1
+    end
+    x = x * 2
+    if x != 6 then
+        return 3
+    end
+    return 0
+end

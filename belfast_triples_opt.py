@@ -842,12 +842,13 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
             for t in trips:
                 new_v = null_operation_eval(t)
                 if new_v is not None:
-                    for ref_t in triple_references[t]:
-                        val: TripleValue = get_triple_reference_value(ref_t, t)
-                        if val == ref_t.l_val:
-                            ref_t.l_val = new_v
-                        elif val == ref_t.r_val:
-                            ref_t.r_val = new_v
+                    if t in triple_references:
+                        for ref_t in triple_references[t]:
+                            val: TripleValue = get_triple_reference_value(ref_t, t)
+                            if val == ref_t.l_val:
+                                ref_t.l_val = new_v
+                            elif val == ref_t.r_val:
+                                ref_t.r_val = new_v
                     trips.remove(t)
                     REMOVAL_HINTS[t] = "Null-Op"
                     did_modify = True
