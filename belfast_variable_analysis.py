@@ -252,7 +252,7 @@ def get_defines(triple: Triple):
         case TripleType.CALL | TripleType.SYSCALL:
             return [create_tref_value(triple),] + [create_register_value(i) for i in CALLER_SAVED_REG]
         case TripleType.ARG:
-            return (create_register_value(ARG_REGISTERS[triple.data]),)
+            return (create_register_value(SYSCALL_ARG_REGISTERS[triple.data] if triple.flags & TF_SYSCALL else ARG_REGISTERS[triple.data]),)
     return ()
 
 def get_uses(triple: Triple, colored_only=True):

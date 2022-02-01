@@ -293,7 +293,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 triples.extend(a_trips)
                 arg_vals.append(a_val)
             for i,a in enumerate(arg_vals):
-                triples.append(Triple(TripleType.ARG, None, a, None, data=i))
+                triples.append(Triple(TripleType.ARG, None, a, None, data=i, flags=TF_SYSCALL))
             triples.append(Triple(TripleType.SYSCALL, op=None, l_val=s_val, r_val=None, data=len(ast.args)-1))
             trip_val = create_tref_value(triples[-1])
         case ASTType.LOAD:

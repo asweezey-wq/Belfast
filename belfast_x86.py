@@ -22,7 +22,7 @@ def get_forced_output_registers(triple: Triple):
         case TripleType.SYSCALL:
             return (RAX_INDEX, ())
         case TripleType.ARG:
-            return (ARG_REGISTERS[triple.data], ())
+            return (SYSCALL_ARG_REGISTERS[triple.data] if triple.flags & TF_SYSCALL else ARG_REGISTERS[triple.data], ())
     
     return None
 
@@ -851,16 +851,16 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     assert t_reg is not None and t_reg == RAX_INDEX, "Expected SYSCALL to be stored in RAX"
                     assert lv is not None and lv.typ == TripleValueType.CONSTANT, "SYSCALL expected a numerical syscall argument"
                     save_regs = list(filter(lambda x: x in [3, 12], trip_ctx.get_all_used_registers(t.index)))
-                    for r in save_regs:
-                        code_stats.mem_stores += 1
-                        write_asm(f"push {reg_str_for_size(r)}")
+                    # for r in save_regs:
+                    #     code_stats.mem_stores += 1
+                    #     write_asm(f"push {reg_str_for_size(r)}")
                     stat_move(lv, code_stats)
                     write_asm(move_instr(t_reg, lv, trip_ctx))
                     code_stats.syscalls += 1
                     write_asm("syscall")
-                    for r in reversed(save_regs):
-                        code_stats.mem_loads += 1
-                        write_asm(f"pop {reg_str_for_size(r)}")
+                    # for r in reversed(save_regs):
+                    #     code_stats.mem_loads += 1
+                    #     write_asm(f"pop {reg_str_for_size(r)}")
                 case TripleType.PRINT:
                     save_regs = list(filter(lambda x: x in DATA_REGISTERS, trip_ctx.get_all_used_registers(t.index+1)))
                     for r in save_regs:

@@ -392,6 +392,7 @@ def trip_val_to_str(tv:TripleValue, as_hex=False):
 TF_SIGNED = 1 # Indicates a signed operation
 TF_BOOL_FORWARDED = 2 # Forwarded booleans are used immediately afterwards in a jump
 TF_REMOVE = 4 # Should remove
+TF_SYSCALL = 8 # to specify a syscall arg
 
 @dataclass(eq=False)
 class Triple:
@@ -499,6 +500,7 @@ byte_registers = [
 ]
 
 ARG_REGISTERS = [6, 5, 4, 3, 9, 10]
+SYSCALL_ARG_REGISTERS = [6, 5, 4, 11, 9, 10]
 DATA_REGISTERS = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16]
 
 CALLER_SAVED_REG = [1, 3, 4, 5, 6, 9, 10, 11, 12]

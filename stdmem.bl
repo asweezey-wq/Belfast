@@ -1,0 +1,20 @@
+const SYSCALL_MMAP = 0x2000000 + 197
+const SYSCALL_MUNMAP = 0x2000000 + 73
+
+const PROT_READ = 0x01
+const PROT_WRITE = 0x02
+
+const MAP_ANONYMOUS = 0x1000
+const MAP_PRIVATE = 0x0002
+
+const PAGE_SIZE = 4096
+
+// Naive implementation for now, we waste a lot of space this way, as a whole page is allocated regardless of size arg
+fun belloc size do
+    return syscall(SYSCALL_MMAP, 0, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0)
+end
+
+// We free the whole page when we do this?
+fun blfree ptr do
+    return syscall(SYSCALL_MUNMAP, ptr, 1)
+end
