@@ -928,7 +928,7 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
 
     prev_trips: List[Triple] = None
 
-    if belfast_data.COMPILER_SETTINGS.generate_tripstr:
+    if belfast_data.COMPILER_SETTINGS.generate_tripstr and belfast_data.COMPILER_SETTINGS.generate_diff:
         with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'w') as f:
             for t in trips:
                 f.write(f"{print_triple(t)}\n")
@@ -941,16 +941,17 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
         label_references: Dict[Triple, List[Triple]] = {}
         for t in filter(lambda x: x.typ == TripleType.LABEL, trips):
             label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, trips))
-        if belfast_data.COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
-            d = get_triple_delta2(prev_trips, trips)
-            output_triple_delta_to_file2(d, f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr")
-            with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'a') as f:
-                for t in trips:
-                    f.write(f"{print_triple(t)}\n")
-                f.write("\n")
-
         CHANGE_HINTS.clear()
-        prev_trips = deepcopy_trips(trips)
+        if belfast_data.COMPILER_SETTINGS.generate_diff:
+            if belfast_data.COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
+                d = get_triple_delta2(prev_trips, trips)
+                output_triple_delta_to_file2(d, f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr")
+                with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'a') as f:
+                    for t in trips:
+                        f.write(f"{print_triple(t)}\n")
+                    f.write("\n")
+
+            prev_trips = deepcopy_trips(trips)
         # for v in trip_ctx.declared_vars:
         #     print(f'Var "{v}":')
         #     print('References:')

@@ -96,11 +96,11 @@ const STDOUT_FILENO = 1;
 const STDIN_FILENO = 1;
 const STDERR_FILENO = 2;
 
-fun puts s do
+fun inline puts s do
     syscall(0x2000004, STDOUT_FILENO, s, strlen(s))
 end
 
-fun err_puts s do
+fun inline err_puts s do
     syscall(0x2000004, STDERR_FILENO, s, strlen(s))
 end
 
@@ -151,23 +151,23 @@ const S_IROTH = 4; // 40 octal    | R for other
 const S_IWOTH = 2; // 20 octal    | W for other
 const S_IXOTH = 1; // 10 octal    | X for other
 
-fun exit i do
+fun inline exit i do
     syscall(SYSCALL_EXIT, i)
 end
 
-fun open filepath mode flags do
+fun inline open filepath mode flags do
     return syscall(SYSCALL_OPEN, filepath, mode, flags)
 end
 
-fun close fd do
+fun inline close fd do
     return syscall(SYSCALL_CLOSE, fd)
 end
 
-fun read fd buf num_bytes do
+fun inline read fd buf num_bytes do
     return syscall(SYSCALL_READ, fd, buf, num_bytes)
 end
 
-fun write fd buf num_bytes do
+fun inline write fd buf num_bytes do
     return syscall(SYSCALL_WRITE, fd, buf, num_bytes)
 end
 
@@ -175,11 +175,11 @@ const SEEK_SET = 0;
 const SEEK_CUR = 1;
 const SEEK_END = 2;
 
-fun seek fd offs whence do
+fun inline seek fd offs whence do
     return syscall(SYSCALL_LSEEK, fd, offs, whence)
 end
 
-fun tell fd do
+fun inline tell fd do
     return syscall(SYSCALL_LSEEK, fd, 0, SEEK_CUR)
 end
 
@@ -218,22 +218,22 @@ end
 const AF_INET = 2
 const SOCK_STREAM = 1
 
-fun socket domain typ protocol do
+fun inline socket domain typ protocol do
     return syscall(SYSCALL_SOCKET, domain, typ, protocol)
 end
 
-fun connect s name namelen do
+fun inline connect s name namelen do
     return syscall(SYSCALL_CONNECT, s, name, namelen)
 end
 
-fun listen s backlog do
+fun inline listen s backlog do
     return syscall(SYSCALL_LISTEN, s, backlog)
 end
 
-fun bind s name namelen do
+fun inline bind s name namelen do
     return syscall(SYSCALL_BIND, s, name, namelen)
 end
 
-fun accept s name namelen do
+fun inline accept s name namelen do
     return syscall(SYSCALL_ACCEPT, s, name, namelen)
 end

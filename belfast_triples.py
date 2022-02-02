@@ -52,6 +52,8 @@ class TripleContext:
         tctx.active_break_label = self.active_break_label
         tctx.function_return_label = self.function_return_label
         tctx.function_return_var = self.function_return_var
+        tctx.func_flags = self.func_flags
+        tctx.functions = self.functions
         tctx.globals = self.globals
         return tctx
 
@@ -372,11 +374,71 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                 arg_trips, arg_val = ast_to_triples(ast.args[i], ctx)
                 triples.extend(arg_trips)
                 arg_vals.append(arg_val)
-            for i,a in enumerate(arg_vals):
-                triples.append(Triple(TripleType.ARG, None, a, None, data=i, uid=triple_uid()))
-            triples.append(Triple(TripleType.CALL, None, TripleValue(TripleValueType.FUN_LABEL, fun_name), None, data=len(ast.args), uid=triple_uid()))
-            triples.append(Triple(TripleType.NOP_REF, None, create_tref_value(triples[-1]), None, flags=TF_DONT_FORWARD, uid=triple_uid()))
-            trip_val = create_tref_value(triples[-1])
+            def inline_funcall():
+                nonlocal trip_val
+                fun_trips = ctx.functions[fun_name]
+                arg_vars = {}
+                i = 0
+                while fun_trips[i].typ == TripleType.FUN_ARG_IN:
+                    v = fun_trips[i].l_val.value
+                    vname = f"$({fun_name})_inline_{v}"
+                    arg_vars[v] = vname
+                    triples.append(Triple(TripleType.ASSIGN, None, create_var_assign_value(vname), arg_vals[i], uid=triple_uid()))
+                    i += 1
+                new_trips_by_uid = {}
+                deferred_refs = {}
+                ret_val = None
+                for t in fun_trips[i:]:
+                    new_t = Triple(t.typ, t.op, None, None, flags=t.flags, size=t.size, data=t.data, uid=triple_uid())
+                    new_trips_by_uid[t.uid] = new_t
+                    if t.uid in deferred_refs:
+                        for tv in deferred_refs[t.uid]:
+                            tv.value = new_t
+                        del deferred_refs[t.uid]
+                    if t.l_val:
+                        if t.l_val.typ == TripleValueType.TRIPLE_REF or t.l_val.typ == TripleValueType.TRIPLE_TARGET:
+                            ref_uid = t.l_val.value.uid
+                            if ref_uid in new_trips_by_uid:
+                                new_t.l_val = TripleValue(t.l_val.typ, new_trips_by_uid[ref_uid])
+                            else:
+                                tv = TripleValue(t.l_val.typ, None)
+                                if ref_uid not in deferred_refs:
+                                    deferred_refs[ref_uid] = []
+                                deferred_refs[ref_uid].append(tv)
+                                new_t.l_val = tv
+                        elif t.l_val.typ == TripleValueType.VAR_REF and t.l_val.value in arg_vars:
+                            new_t.l_val = TripleValue(t.l_val.typ, arg_vars[t.l_val.value])
+                        else:
+                            new_t.l_val = TripleValue(t.l_val.typ, t.l_val.value)
+                    if t.r_val:
+                        if t.r_val.typ == TripleValueType.TRIPLE_REF or t.r_val.typ == TripleValueType.TRIPLE_TARGET:
+                            ref_uid = t.r_val.value.uid
+                            if ref_uid in new_trips_by_uid:
+                                new_t.r_val = TripleValue(t.r_val.typ, new_trips_by_uid[ref_uid])
+                            else:
+                                tv = TripleValue(t.r_val.typ, None)
+                                if ref_uid not in deferred_refs:
+                                    deferred_refs[ref_uid] = []
+                                deferred_refs[ref_uid].append(tv)
+                                new_t.r_val = tv
+                        elif t.r_val.typ == TripleValueType.VAR_REF and t.r_val.value in arg_vars:
+                            new_t.r_val = TripleValue(t.r_val.typ, arg_vars[t.r_val.value])
+                        else:
+                            new_t.r_val = TripleValue(t.r_val.typ, t.r_val.value)
+                    if new_t.typ == TripleType.RETURN:
+                        return_val = new_t.l_val
+                    else:
+                        triples.append(new_t)
+                trip_val = return_val
+
+            if fun_name in ctx.func_flags and ctx.func_flags[fun_name] & SF_INLINE:
+                inline_funcall()
+            else:
+                for i,a in enumerate(arg_vals):
+                    triples.append(Triple(TripleType.ARG, None, a, None, data=i, uid=triple_uid()))
+                triples.append(Triple(TripleType.CALL, None, TripleValue(TripleValueType.FUN_LABEL, fun_name), None, data=len(ast.args), uid=triple_uid()))
+                triples.append(Triple(TripleType.NOP_REF, None, create_tref_value(triples[-1]), None, flags=TF_DONT_FORWARD, uid=triple_uid()))
+                trip_val = create_tref_value(triples[-1])
         case ASTType.RETURN:
             assert ctx.function_return_label is not None and ctx.function_return_var is not None
             exp_trips, exp_val = ast_to_triples(ast.ast_ref, ctx)

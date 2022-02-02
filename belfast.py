@@ -953,6 +953,7 @@ if __name__ == '__main__':
     argp.add_argument('-reg', '--registers', dest='registers', action='store', help='Set the limit on the number of registers', default='0')
     argp.add_argument('-r', '--run', dest='run', action='store_true', help='Compile and run the program')
     argp.add_argument('-s', '--stat', dest='stat', help='Stat the code generation')
+    argp.add_argument('-d', '--diff', dest='diff', action='store_true', help='Store the optimization diff files')
     args = argp.parse_args()
 
     filename = args.file
@@ -970,6 +971,9 @@ if __name__ == '__main__':
 
     if args.no_const:
         belfast_data.COMPILER_SETTINGS.const_propagation = False
+    
+    if args.diff:
+        belfast_data.COMPILER_SETTINGS.generate_diff = True
 
     try:
         belfast_data.COMPILER_SETTINGS.register_limit = int(args.registers)

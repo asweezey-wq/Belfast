@@ -1,4 +1,3 @@
-from email import iterators
 from enum import Enum, auto
 from typing import *
 from dataclasses import dataclass, asdict
@@ -568,6 +567,7 @@ class CompilerSettings:
     output_filename: str = ''
     generate_tripstr: bool = True
     tripstr_filename: str = 'prog.tripstr'
+    generate_diff: bool = False
     generate_asm: bool = True
     verbose: int = 0
     asm_comments: bool = False
