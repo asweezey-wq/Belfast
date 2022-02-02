@@ -44,47 +44,47 @@ def insert_x86_regmoves(trips: List[Triple]):
         if t.typ == TripleType.BINARY_OP:
             if t.op == Operator.DIVIDE or t.op == Operator.MODULUS or t.op == Operator.MULTIPLY:
                 reg_val = TripleValue(TripleValueType.REGISTER, RAX_INDEX)
-                new_trips.append(Triple(TripleType.REGMOVE, None, reg_val, t.l_val))
+                new_trips.append(Triple(TripleType.REGMOVE, None, reg_val, t.l_val, uid=triple_uid()))
                 t.l_val = reg_val
                 if t.r_val.typ == TripleValueType.CONSTANT:
-                    new_trips.append(Triple(TripleType.NOP_REF, None, t.r_val, None))
+                    new_trips.append(Triple(TripleType.NOP_REF, None, t.r_val, None, uid=triple_uid()))
                     t.r_val = TripleValue(TripleValueType.TRIPLE_REF, new_trips[-1])
-                new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RDX_INDEX), TripleValue(TripleValueType.CONSTANT, 0)))
+                new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RDX_INDEX), TripleValue(TripleValueType.CONSTANT, 0), uid=triple_uid()))
                 new_trips.append(t)
                 if t.op == Operator.DIVIDE or t.op == Operator.MULTIPLY:
-                    new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RDX_INDEX), TripleValue(TripleValueType.UNKNOWN, 0)))
+                    new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RDX_INDEX), TripleValue(TripleValueType.UNKNOWN, 0), uid=triple_uid()))
                 elif t.op == Operator.MODULUS:
-                    new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RAX_INDEX), TripleValue(TripleValueType.UNKNOWN, 0)))
+                    new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RAX_INDEX), TripleValue(TripleValueType.UNKNOWN, 0), uid=triple_uid()))
                 continue
         in_l, in_r = get_forced_input_registers(t)
         if in_l != 0:
             reg_val = TripleValue(TripleValueType.REGISTER, in_l)
-            new_trips.append(Triple(TripleType.REGMOVE, None, reg_val, t.l_val))
+            new_trips.append(Triple(TripleType.REGMOVE, None, reg_val, t.l_val, uid=triple_uid()))
             t.l_val = reg_val
         if in_r != 0:
             reg_val = TripleValue(TripleValueType.REGISTER, in_r)
-            new_trips.append(Triple(TripleType.REGMOVE, None, reg_val, t.r_val))
+            new_trips.append(Triple(TripleType.REGMOVE, None, reg_val, t.r_val, uid=triple_uid()))
             t.r_val = reg_val
  
         if t.typ == TripleType.ARG:
             arg_reg = get_forced_output_registers(t)
-            new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, arg_reg[0]), t.l_val))
+            new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, arg_reg[0]), t.l_val, uid=triple_uid()))
             continue
         elif t.typ == TripleType.FUN_ARG_IN:
             new_trips.append(t)
-            new_trips.append(Triple(TripleType.ASSIGN, None, t.l_val, TripleValue(TripleValueType.REGISTER, ARG_REGISTERS[t.data])))
+            new_trips.append(Triple(TripleType.ASSIGN, None, t.l_val, TripleValue(TripleValueType.REGISTER, ARG_REGISTERS[t.data]), uid=triple_uid()))
         else:
             new_trips.append(t)
         out_r = get_forced_output_registers(t)
         if out_r is not None:
             # new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, out_r[0]), TripleValue(TripleValueType.TRIPLE_REF, t)))
             for byp_r in out_r[1]:
-                new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, byp_r), TripleValue(TripleValueType.UNKNOWN, 0)))
+                new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, byp_r), TripleValue(TripleValueType.UNKNOWN, 0), uid=triple_uid()))
         if t.typ == TripleType.BINARY_OP and t.op in [Operator.SHIFT_RIGHT, Operator.SHIFT_LEFT]:
             if t.r_val.typ != TripleValueType.CONSTANT:
-                new_trips.append(Triple(TripleType.NOP_USE, None, t.r_val, None))
+                new_trips.append(Triple(TripleType.NOP_USE, None, t.r_val, None, uid=triple_uid()))
         elif t.typ == TripleType.SYSCALL:
-            new_trips.append(Triple(TripleType.NOP_USE, None, TripleValue(TripleValueType.TRIPLE_REF, t), None))
+            new_trips.append(Triple(TripleType.NOP_USE, None, TripleValue(TripleValueType.TRIPLE_REF, t), None, uid=triple_uid()))
     return new_trips
 
 def does_reference_as_memory(t:Triple, ref_t:Triple):
@@ -113,7 +113,7 @@ def insert_lea(trips: List[Triple], trip_ctx: TripleContext):
 
         for t in to_remove:
             trips.remove(t)
-            REMOVAL_HINTS[t] = "Replaced by address computation"
+            CHANGE_HINTS[t] = "Replaced by address computation"
 
     return len(to_remove) > 0
 

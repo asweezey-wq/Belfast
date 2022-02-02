@@ -1,7 +1,9 @@
+from email import iterators
 from enum import Enum, auto
 from typing import *
 from dataclasses import dataclass, asdict
 import sys
+import itertools
 
 DO_ASM_COMMENTS = True
 
@@ -380,6 +382,8 @@ def trip_val_to_str(tv:TripleValue, as_hex=False):
         case TripleValueType.LOCAL_BUFFER_REF:
             return f"buffer[{tv.value.size}]"
         case TripleValueType.TRIPLE_REF | TripleValueType.TRIPLE_TARGET:
+            if tv.value is None:
+                return "(NONE)"
             assert isinstance(tv.value, Triple), "Expected Triple Ref to reference Triple value"
             return f"({tv.value.index})"
         case TripleValueType.REGISTER:
@@ -418,12 +422,13 @@ class Triple:
     flags:int = 0
     size:int = 64
     data:int = 0
+    uid:int = -1
 
     def __hash__(self) -> int:
-        return self.index
+        return self.uid
 
     def __eq__(self, __o: object) -> bool:
-        return isinstance(__o, Triple) and __o.index == self.index
+        return isinstance(__o, Triple) and __o.uid == self.uid
 
     def __repr__(self) -> str:
         return f"{str(self.index) + ': ' if self.index >= 0 else ''}" + f"{self.typ.name} " + (f"{self.op.name} " if self.op is not None else "") + f"{str(self.l_val) if self.l_val is not None else ''} {str(self.r_val if self.r_val is not None else '')}"

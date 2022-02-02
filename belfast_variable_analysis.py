@@ -518,27 +518,27 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
             basic_var = v
             new_varname = f"${d}_inductive"
             if a == -1 and b != 0:
-                t = Triple(TripleType.BINARY_OP, Operator.MINUS, create_const_value(b), v)
+                t = Triple(TripleType.BINARY_OP, Operator.MINUS, create_const_value(b), v, uid=triple_uid())
                 v = create_tref_value(t)
                 loop_pre_header.append(t)
             else:
                 if a != 1:
-                    t = Triple(TripleType.BINARY_OP, Operator.MULTIPLY, v, create_const_value(a))
+                    t = Triple(TripleType.BINARY_OP, Operator.MULTIPLY, v, create_const_value(a), uid=triple_uid())
                     v = create_tref_value(t)
                     loop_pre_header.append(t)
                 if b != 0:
-                    t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, create_const_value(b))
+                    t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, create_const_value(b), uid=triple_uid())
                     v = create_tref_value(t)
                     loop_pre_header.append(t)
             if c is not None:
-                t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, c)
+                t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, c, uid=triple_uid())
                 v = create_tref_value(t)
                 loop_pre_header.append(t)
             if d_ is not None:
-                t = Triple(TripleType.BINARY_OP, Operator.MINUS, v, d_)
+                t = Triple(TripleType.BINARY_OP, Operator.MINUS, v, d_, uid=triple_uid())
                 v = create_tref_value(t)
                 loop_pre_header.append(t)
-            t = Triple(TripleType.ASSIGN, None, create_var_assign_value(new_varname), v)
+            t = Triple(TripleType.ASSIGN, None, create_var_assign_value(new_varname), v, uid=triple_uid())
             v = create_tref_value(t)
             loop_pre_header.append(t)
             if d.typ == TripleValueType.VAR_REF:
@@ -556,11 +556,11 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                 assert False
 
             ind = loop_defines[basic_var][0].index + 1
-            t = Triple(TripleType.BINARY_OP, Operator.PLUS, create_var_ref_value(new_varname), create_const_value(a * basic_induction_vars[basic_var]))
+            t = Triple(TripleType.BINARY_OP, Operator.PLUS, create_var_ref_value(new_varname), create_const_value(a * basic_induction_vars[basic_var]), uid=triple_uid())
             t.index = ind
             triple_inserts.append(t)
             ind_step_trips.append(t)
-            t = Triple(TripleType.ASSIGN, None, create_var_assign_value(new_varname), create_tref_value(t))
+            t = Triple(TripleType.ASSIGN, None, create_var_assign_value(new_varname), create_tref_value(t), uid=triple_uid())
             t.index = ind + 1
             triple_inserts.append(t)
             ind_step_trips.append(t)
@@ -570,13 +570,13 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
         new_labels = []
         if len(loop_pre_header) > 0:
             ind_offs = b1.trips[0].index
-            new_label = Triple(TripleType.LABEL, None, None, None)
+            new_label = Triple(TripleType.LABEL, None, None, None, uid=triple_uid())
             assert b1.trips[0].typ == TripleType.LABEL
             for t in trips:
                 l_ref = get_triple_label_reference_value(t, b1.trips[0])
                 if l_ref is not None:
                     l_ref.value = new_label
-                    ADD_HINTS[t] = "Retargeted to loop pre-header"
+                    CHANGE_HINTS[t] = "Retargeted to loop pre-header"
                 if t == b1.trips[0]:
                     break
             trips.insert(ind_offs, new_label)
@@ -590,16 +590,16 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
         index_triples(trips)
 
         for t in loop_pre_header:
-            ADD_HINTS[t] = "Loop Invariant"
+            CHANGE_HINTS[t] = "Loop Invariant"
         for t in ind_defines:
-            ADD_HINTS[t] = "Derived Induction variable"
+            CHANGE_HINTS[t] = "Derived Induction variable"
         for t in ind_step_trips:
-            ADD_HINTS[t] = "Inductive step"
+            CHANGE_HINTS[t] = "Inductive step"
         for t in new_labels:
-            ADD_HINTS[t] = "Loop pre-header"
+            CHANGE_HINTS[t] = "Loop pre-header"
         for t in remove_induction:
             trips.remove(t)
-            REMOVAL_HINTS[t] = "Useluess induction variable"
+            CHANGE_HINTS[t] = "Useluess induction variable"
 
         if len(triple_inserts) > 0 or len(loop_pre_header) > 0 or len(remove_induction) > 0:
             return True

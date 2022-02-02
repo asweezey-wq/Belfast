@@ -21,8 +21,7 @@ def set_opt_flags(f: dict):
     global OPTIMIZATION_FLAGS
     OPTIMIZATION_FLAGS = f
 
-REMOVAL_HINTS = {}
-ADD_HINTS = {}
+CHANGE_HINTS = {}
 
 # For common expressions
 def triples_match(t1: Triple, t2: Triple):
@@ -100,7 +99,7 @@ def strength_reduce(triple: Triple):
                         triple.op = Operator.NEGATE
                         triple.l_val = triple.r_val
                         triple.r_val = None
-                        REMOVAL_HINTS[triple] = "Strength Reduce"
+                        CHANGE_HINTS[triple] = "Strength Reduce"
                         return True
                 case Operator.MULTIPLY:
                     # TODO: This only works when the value is positive
@@ -111,13 +110,13 @@ def strength_reduce(triple: Triple):
                                 triple.op = Operator.SHIFT_LEFT
                                 triple.flags |= TF_SIGNED
                                 triple.r_val = create_const_value(int(l2))
-                                REMOVAL_HINTS[triple] = "Strength Reduce"
+                                CHANGE_HINTS[triple] = "Strength Reduce"
                                 return True
                         elif triple.r_val.value == -1:
                             triple.typ = TripleType.UNARY_OP
                             triple.op = Operator.NEGATE
                             triple.r_val = None
-                            REMOVAL_HINTS[triple] = "Strength Reduce"
+                            CHANGE_HINTS[triple] = "Strength Reduce"
                             return True
                     elif triple.l_val.typ == TripleValueType.CONSTANT:
                         if triple.l_val.value > 0:
@@ -127,14 +126,14 @@ def strength_reduce(triple: Triple):
                                 triple.flags |= TF_SIGNED
                                 triple.l_val = triple.r_val
                                 triple.r_val = create_const_value(int(l2))
-                                REMOVAL_HINTS[triple] = "Strength Reduce"
+                                CHANGE_HINTS[triple] = "Strength Reduce"
                                 return True
                         elif triple.l_val.value == -1:
                             triple.typ = TripleType.UNARY_OP
                             triple.op = Operator.NEGATE
                             triple.l_val = triple.r_val
                             triple.r_val = None
-                            REMOVAL_HINTS[triple] = "Strength Reduce"
+                            CHANGE_HINTS[triple] = "Strength Reduce"
                             return True
                 case Operator.DIVIDE:
                     # TODO: This only works when the value is positive
@@ -144,7 +143,7 @@ def strength_reduce(triple: Triple):
                             triple.op = Operator.SHIFT_RIGHT
                             triple.flags |= TF_SIGNED
                             triple.r_val = create_const_value(int(l2))
-                            REMOVAL_HINTS[triple] = "Strength Reduce"
+                            CHANGE_HINTS[triple] = "Strength Reduce"
                             return True
                 case Operator.MODULUS:
                     if triple.r_val.typ == TripleValueType.CONSTANT:
@@ -152,7 +151,7 @@ def strength_reduce(triple: Triple):
                         if l2 == int(l2):
                             triple.op = Operator.BITWISE_AND
                             triple.r_val = create_const_value(triple.r_val.value - 1)
-                            REMOVAL_HINTS[triple] = "Strength Reduce"
+                            CHANGE_HINTS[triple] = "Strength Reduce"
                             return True
 
     return False
@@ -225,8 +224,7 @@ def const_eval_pass(triple_references: Dict[Triple, List[Triple]]):
                         assert val.typ == TripleValueType.TRIPLE_REF
                         val.typ = TripleValueType.CONSTANT
                         val.value = n
-                        ADD_HINTS[ref_t] = "Constant Propagation"
-                        REMOVAL_HINTS[ref_t] = "Constant Propagation"
+                        CHANGE_HINTS[ref_t] = "Constant Propagation"
                 if len(v) > 0:
                     did_modify = True
                 del triple_references[t]
@@ -243,7 +241,7 @@ def branch_const_eval_pass(triples: List[Triple], triple_references: Dict[Triple
                     t.typ = TripleType.GOTO
                     t.l_val = t.r_val
                     t.r_val = None
-                    REMOVAL_HINTS[t] = "Branch constant eval"
+                    CHANGE_HINTS[t] = "Branch constant eval"
                 else:
                     items_to_remove.append(t)
             elif t.op == Operator.EQ:
@@ -251,14 +249,14 @@ def branch_const_eval_pass(triples: List[Triple], triple_references: Dict[Triple
                     t.typ = TripleType.GOTO
                     t.l_val = t.r_val
                     t.r_val = None
-                    REMOVAL_HINTS[t] = "Branch constant eval"
+                    CHANGE_HINTS[t] = "Branch constant eval"
                 else:
                     items_to_remove.append(t)
             else:
                 assert False, f"Unknown Operator {t.op.name}"
     for t in items_to_remove:
         triples.remove(t)
-        REMOVAL_HINTS[t] = "Branch constant eval"
+        CHANGE_HINTS[t] = "Branch constant eval"
     return len(items_to_remove) > 0
 
 def does_triple_modify_state(triple: Triple):
@@ -269,7 +267,7 @@ def remove_unused_triples(trips: List[Triple], triple_references: Dict[Triple, L
     did_remove = False
     for t in unused_triples:
         trips.remove(t)
-        REMOVAL_HINTS[t] = "Unused"
+        CHANGE_HINTS[t] = "Unused"
         did_remove = True
         if t in triple_references:
             del triple_references[t]
@@ -290,7 +288,7 @@ def forward_labels(trips: List[Triple], label_references: Dict[Triple, List[Trip
                 ref_val: TripleValue = get_triple_label_reference_value(ref_t, t)
                 assert ref_val is not None
                 ref_val.value = forwarded_label
-                ADD_HINTS[ref_t] = "Forwarded Label"
+                CHANGE_HINTS[ref_t] = "Forwarded Label"
             del label_references[t]
             did_forward = True
     return did_forward
@@ -300,7 +298,7 @@ def remove_unused_labels(trips: List[Triple], label_references: Dict[Triple, Lis
     did_remove = False
     for t in unused_triples:
         trips.remove(t)
-        REMOVAL_HINTS[t] = "Unused"
+        CHANGE_HINTS[t] = "Unused"
         did_remove = True
         if t in label_references:
             del label_references[t]
@@ -319,7 +317,7 @@ def remove_unreachable_triples(trips: List[Triple]):
     
     for t in trips_to_remove:
         trips.remove(t)
-        REMOVAL_HINTS[t] = "Unreachable"
+        CHANGE_HINTS[t] = "Unreachable"
 
     return len(trips_to_remove) > 0
 
@@ -333,7 +331,7 @@ def remove_pointless_goto(trips: List[Triple]):
                 to_remove.append(t)
     for t in to_remove:
         trips.remove(t)
-        REMOVAL_HINTS[t] = "Useless GOTO"
+        CHANGE_HINTS[t] = "Useless GOTO"
     return len(to_remove) > 0
 
 def simplify_binops(trips: List[Triple], triple_references: Dict[Triple, List[Triple]]):
@@ -354,29 +352,31 @@ def simplify_binops(trips: List[Triple], triple_references: Dict[Triple, List[Tr
                                     case Operator.PLUS:
                                         if tref.op == Operator.PLUS:
                                             tref_consts[0].value += consts[0].value
-                                            ADD_HINTS[tref] = "Merged operations"
+                                            CHANGE_HINTS[tref] = "Merged operations"
                                             to_remove[t] = tref
                                         elif tref.op == Operator.MINUS:
                                             if tref_consts[0] == tref.r_val:
                                                 tref_consts[0].value += consts[0].value
-                                                ADD_HINTS[tref] = "Merged operations"
+                                                CHANGE_HINTS[tref] = "Merged operations"
                                                 to_remove[t] = tref
                                     case Operator.MINUS:
                                         if tref.op == Operator.PLUS:
                                             tref_consts[0].value -= consts[0].value
-                                            ADD_HINTS[tref] = "Merged operations"
+                                            CHANGE_HINTS[tref] = "Merged operations"
                                             to_remove[t] = tref
                                         elif tref.op == Operator.MINUS:
                                             if tref_consts[0] == tref.r_val:
                                                 tref_consts[0].value -= consts[0].value
-                                                ADD_HINTS[tref] = "Merged operations"
+                                                CHANGE_HINTS[tref] = "Merged operations"
                                                 to_remove[t] = tref
     
     for t,t2 in to_remove.items():
         for t1 in triple_references[t]:
             tv = get_triple_reference_value(t1, t)
             tv.value = t2
+            CHANGE_HINTS[t1] = "Retarged to merge operation"
         trips.remove(t)
+        CHANGE_HINTS[t] = "Merged operations"
     
     return len(to_remove) > 0
 
@@ -644,8 +644,7 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                             if find_assign_between(assign_trip, t, t.l_val.value) is None:
                                 if assign_trip.r_val.typ == TripleValueType.CONSTANT or find_assign_between(assign_trip, t, assign_trip.r_val.value) is None:
                                     t.l_val = assign_trip.r_val
-                                    REMOVAL_HINTS[t] = "Value forwarded"
-                                    ADD_HINTS[t] = "Value forwarded"
+                                    CHANGE_HINTS[t] = "Value forwarded"
                                     did_change = True
                 if t.r_val is not None and t.r_val.typ == TripleValueType.VAR_REF:
                     assign_trip = find_last_dominating_assign(t, t.r_val.value)
@@ -654,22 +653,19 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                             if find_assign_between(assign_trip, t, t.r_val.value) is None:
                                 if assign_trip.r_val.typ == TripleValueType.CONSTANT or find_assign_between(assign_trip, t, assign_trip.r_val.value) is None:
                                     t.r_val = assign_trip.r_val
-                                    REMOVAL_HINTS[t] = "Value forwarded"
-                                    ADD_HINTS[t] = "Value forwarded"
+                                    CHANGE_HINTS[t] = "Value forwarded"
                                     did_change = True
                 if t.l_val is not None and t.l_val.typ == TripleValueType.TRIPLE_REF:
                     l_trip = t.l_val.value
                     if l_trip.typ == TripleType.NOP_REF and (l_trip.flags & TF_DONT_FORWARD) == 0:
                         t.l_val = l_trip.l_val
-                        REMOVAL_HINTS[t] = "Value forwarded"
-                        ADD_HINTS[t] = "Value forwarded"
+                        CHANGE_HINTS[t] = "Value forwarded"
                         did_change = True
                 if t.r_val is not None and t.r_val.typ == TripleValueType.TRIPLE_REF:
                     r_trip = t.r_val.value
                     if r_trip.typ == TripleType.NOP_REF and (r_trip.flags & TF_DONT_FORWARD) == 0:
                         t.r_val = r_trip.l_val
-                        REMOVAL_HINTS[t] = "Value forwarded"
-                        ADD_HINTS[t] = "Value forwarded"
+                        CHANGE_HINTS[t] = "Value forwarded"
                         did_change = True
             if t.typ == TripleType.ASSIGN and OPTIMIZATION_FLAGS['unused-code']:
                 assert t.l_val.typ == TripleValueType.VAR_ASSIGN
@@ -677,11 +673,11 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                 var_ref = create_var_ref_value(variable)
                 if var_ref in b.vals_assigned and b.vals_assigned[var_ref].index > t.index:
                     trips.remove(t)
-                    REMOVAL_HINTS[t] = "Assignment without use"
+                    CHANGE_HINTS[t] = "Assignment without use"
                     did_change = True
                 elif var_ref not in b.out_vals and all([not triple_references_var(t1, variable) for t1 in b.trips[i + 1:]]):
                     trips.remove(t)
-                    REMOVAL_HINTS[t] = "Assignment without use"
+                    CHANGE_HINTS[t] = "Assignment without use"
                     did_change = True
             if not did_change and OPTIMIZATION_FLAGS['common-exp']:
                 # TODO: create a table for faster common exp lookups
@@ -716,7 +712,7 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                                 
                             if not has_changed:
                                 tv.value = last_match
-                                REMOVAL_HINTS[t] = "Common expression"
+                                CHANGE_HINTS[t] = "Common expression"
                                 did_change = True
                 if lref is not None:
                     common_exp_match(lref, lv)
@@ -739,16 +735,57 @@ def output_triple_delta_to_file(d, filename):
         while ri < len(rt) or ai < len(at):
             if ri >= len(rt) or (ai < len(at) and at[ai].index < rt[ri].index):
                 f.write(f" + {print_triple(at[ai])}")
-                if at[ai] in ADD_HINTS:
-                    f.write(f" ({ADD_HINTS[at[ai]]})")
+                if at[ai] in CHANGE_HINTS:
+                    f.write(f" ({CHANGE_HINTS[at[ai]]})")
                 f.write("\n")
                 ai += 1
             else:
                 f.write(f" - {print_triple(rt[ri])}")
-                if rt[ri] in REMOVAL_HINTS:
-                    f.write(f" ({REMOVAL_HINTS[rt[ri]]})")
+                if rt[ri] in CHANGE_HINTS:
+                    f.write(f" ({CHANGE_HINTS[rt[ri]]})")
                 f.write("\n")
                 ri += 1
+        f.write("\n")
+
+def output_triple_delta_to_file2(d, filename):
+    with open(filename, 'a') as f:
+        at, ct, rt = d
+        ri = 0
+        ci = 0
+        ai = 0
+        rt = sorted(rt, key=lambda x: x.index)
+        ct = sorted(ct, key=lambda x: x[0].index)
+        at = sorted(at, key=lambda x: x.index)
+        while ri < len(rt) or ai < len(at) or ci < len(ct):
+            wr_t = []
+            if ri < len(rt):
+                wr_t.append((0, rt[ri]))
+            if ci < len(ct):
+                wr_t.append((1, ct[ci][0]))
+            if ai < len(at):
+                wr_t.append((2, at[ai]))
+            min_index = min([t[1].index for t in wr_t])
+            min_item = [t for t in wr_t if t[1].index == min_index][0]
+            trip = min_item[1]
+            if min_item[0] == 0:
+                f.write(f" - {print_triple(trip)}")
+                if trip in CHANGE_HINTS:
+                    f.write(f" ({CHANGE_HINTS[trip]})")
+                f.write("\n")
+                ri += 1
+            elif min_item[0] == 1:
+                trip1, trip2 = ct[ci]
+                f.write(f" < {print_triple(trip1)}\n > {print_triple(trip2)}")
+                if trip1 in CHANGE_HINTS:
+                    f.write(f" ({CHANGE_HINTS[trip1]})")
+                f.write("\n")
+                ci += 1
+            else:
+                f.write(f" + {print_triple(trip)}")
+                if trip in CHANGE_HINTS:
+                    f.write(f" ({CHANGE_HINTS[trip]})")
+                f.write("\n")
+                ai += 1
         f.write("\n")
                 
 
@@ -762,6 +799,51 @@ def shallowcopy_trips(trips: List[Triple], triple_references, label_references):
         return new_t
     
     return [shallowcopy_triple(t) for t in trips]
+
+def deepcopy_trips(trips: List[Triple]):
+    deferred_refs = {} # uid: triplevalue list 
+    new_trips_by_uid = {}
+    def deepcopy_triple(t: Triple):
+        new_t = Triple(t.typ, t.op, None, None, t.index, flags=t.flags, data=t.data, size=t.size, uid=t.uid)
+        new_trips_by_uid[t.uid] = new_t
+        if t.uid in deferred_refs:
+            for tv in deferred_refs[t.uid]:
+                tv.value = new_t
+            del deferred_refs[t.uid]
+        if t.l_val:
+            if t.l_val.typ == TripleValueType.TRIPLE_REF:
+                ref_uid = t.l_val.value.uid
+                if ref_uid in new_trips_by_uid:
+                    new_t.l_val = TripleValue(TripleValueType.TRIPLE_REF, new_trips_by_uid[ref_uid])
+                else:
+                    tv = TripleValue(TripleValueType.TRIPLE_REF, None)
+                    if ref_uid not in deferred_refs:
+                        deferred_refs[ref_uid] = []
+                    deferred_refs[ref_uid].append(tv)
+                    new_t.l_val = tv
+            else:
+                new_t.l_val = TripleValue(t.l_val.typ, t.l_val.value)
+        if t.r_val:
+            if t.r_val.typ == TripleValueType.TRIPLE_REF:
+                ref_uid = t.r_val.value.uid
+                if ref_uid in new_trips_by_uid:
+                    new_t.r_val = TripleValue(TripleValueType.TRIPLE_REF, new_trips_by_uid[ref_uid])
+                else:
+                    tv = TripleValue(TripleValueType.TRIPLE_REF, None)
+                    if ref_uid not in deferred_refs:
+                        deferred_refs[ref_uid] = []
+                    deferred_refs[ref_uid].append(tv)
+                    new_t.r_val = tv
+            else:
+                new_t.r_val = TripleValue(t.r_val.typ, t.r_val.value)
+        return new_t
+
+    new_trips = [deepcopy_triple(t) for t in trips]
+    # if len(deferred_refs):
+    #     tl = [t for t in trips if t.uid in deferred_refs]
+    #     assert False, "Unhandled deferred triple references"
+    
+    return new_trips
 
 def get_triple_delta(old_trips: List[Triple], new_trips: List[Triple]):
     removed_triples = []
@@ -810,6 +892,35 @@ def get_triple_delta(old_trips: List[Triple], new_trips: List[Triple]):
 
     return added_triples, removed_triples
 
+def get_triple_delta2(old_trips: List[Triple], new_trips: List[Triple]):
+    trips_by_uid = {t.uid: t for t in old_trips}
+    added_trips = []
+    changed_trips = []
+    removed_trips = []
+
+    def shallow_trips_equal(t1, t2):
+        if t1.typ != t2.typ or t1.op != t2.op:
+            return False
+        if (t1.l_val is not None) != (t2.l_val is not None) or (t1.r_val is not None) != (t2.r_val is not None):
+            return False
+        if t1.l_val is not None and (t1.l_val.typ != t2.l_val.typ or t1.l_val.value != t2.l_val.value):
+            return False
+        if t1.r_val is not None and (t1.r_val.typ != t2.r_val.typ or t1.r_val.value != t2.r_val.value):
+            return False
+        return True
+
+    for t in new_trips:
+        eq_trip = trips_by_uid[t.uid] if t.uid in trips_by_uid else None
+        if eq_trip:
+            del trips_by_uid[t.uid]
+            if not shallow_trips_equal(t, eq_trip):
+                changed_trips.append((eq_trip, t))
+        else:
+            added_trips.append(t)
+
+    removed_trips = list(trips_by_uid.values())
+    return added_trips, changed_trips, removed_trips
+
 def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
     did_modify = True
 
@@ -831,16 +942,15 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
         for t in filter(lambda x: x.typ == TripleType.LABEL, trips):
             label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, trips))
         if belfast_data.COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
-            d = get_triple_delta(prev_trips, trips)
-            output_triple_delta_to_file(d, f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr")
+            d = get_triple_delta2(prev_trips, trips)
+            output_triple_delta_to_file2(d, f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr")
             with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'a') as f:
                 for t in trips:
                     f.write(f"{print_triple(t)}\n")
                 f.write("\n")
 
-        REMOVAL_HINTS.clear()
-        ADD_HINTS.clear()
-        prev_trips = shallowcopy_trips(trips, triple_references, label_references)
+        CHANGE_HINTS.clear()
+        prev_trips = deepcopy_trips(trips)
         # for v in trip_ctx.declared_vars:
         #     print(f'Var "{v}":')
         #     print('References:')
@@ -871,7 +981,7 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
                             elif val == ref_t.r_val:
                                 ref_t.r_val = new_v
                     trips.remove(t)
-                    REMOVAL_HINTS[t] = "Null-Op"
+                    CHANGE_HINTS[t] = "Null-Op"
                     did_modify = True
                 
 
