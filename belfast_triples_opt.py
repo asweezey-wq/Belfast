@@ -657,6 +657,20 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                                     REMOVAL_HINTS[t] = "Value forwarded"
                                     ADD_HINTS[t] = "Value forwarded"
                                     did_change = True
+                if t.l_val is not None and t.l_val.typ == TripleValueType.TRIPLE_REF:
+                    l_trip = t.l_val.value
+                    if l_trip.typ == TripleType.NOP_REF:
+                        t.l_val = l_trip.l_val
+                        REMOVAL_HINTS[t] = "Value forwarded"
+                        ADD_HINTS[t] = "Value forwarded"
+                        did_change = True
+                if t.r_val is not None and t.r_val.typ == TripleValueType.TRIPLE_REF:
+                    r_trip = t.r_val.value
+                    if r_trip.typ == TripleType.NOP_REF:
+                        t.r_val = r_trip.l_val
+                        REMOVAL_HINTS[t] = "Value forwarded"
+                        ADD_HINTS[t] = "Value forwarded"
+                        did_change = True
             if t.typ == TripleType.ASSIGN and OPTIMIZATION_FLAGS['unused-code']:
                 assert t.l_val.typ == TripleValueType.VAR_ASSIGN
                 variable = t.l_val.value

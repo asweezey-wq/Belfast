@@ -672,6 +672,9 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     match t.op:
                         case Operator.PLUS:
                             assert t_reg is not None, "Expected this value to be assigned to a register"
+                            if rv.typ == TripleValueType.CONSTANT and rv.value < 0:
+                                t.op = Operator.MINUS
+                                rv.value = -rv.value
                             if lv.value != t_reg:
                                 if rv.typ == TripleValueType.REGISTER and rv.value == t_reg:
                                     switch_lr = True
@@ -680,7 +683,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                                 else:
                                     if DO_ADDRESS_COMPUTING and lv.typ == TripleValueType.REGISTER and rv.typ in [TripleValueType.CONSTANT, TripleValueType.REGISTER]:
                                         code_stats.basic_ops += 1
-                                        write_asm(f"lea {reg_str_for_size(t_reg)}, [{reg_str_for_size(lv.value)}+{triple_value_str(rv, trip_ctx)}]")
+                                        write_asm(f"lea {reg_str_for_size(t_reg)}, [{reg_str_for_size(lv.value)}{'+' if t.op == Operator.PLUS else '-'}{triple_value_str(rv, trip_ctx)}]")
                                     else:
                                         stat_move(lv, code_stats)
                                         write_asm(move_instr(t_reg, lv, trip_ctx))

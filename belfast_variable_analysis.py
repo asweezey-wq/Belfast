@@ -1,5 +1,3 @@
-from distutils.util import subst_vars
-from types import new_class
 from belfast_data import *
 from belfast_triples import print_triple
 from belfast_triples_opt import *
@@ -269,7 +267,7 @@ def get_uses(triple: Triple, colored_only=True):
                 vals.append(triple.l_val)
             if triple.typ == TripleType.BINARY_OP and triple.op in [Operator.DIVIDE, Operator.MODULUS, Operator.MULTIPLY]:
                 vals.append(create_register_value(RDX_INDEX))
-        case TripleType.UNARY_OP | TripleType.IF_COND | TripleType.PRINT | TripleType.NOP_USE | TripleType.LOAD | TripleType.ARG | TripleType.RETURN:
+        case TripleType.UNARY_OP | TripleType.IF_COND | TripleType.PRINT | TripleType.NOP_USE | TripleType.NOP_REF | TripleType.LOAD | TripleType.ARG | TripleType.RETURN:
             if triple.typ == TripleType.IF_COND and triple.l_val.typ == TripleValueType.TRIPLE_REF and (triple.l_val.value.flags & TF_BOOL_FORWARDED) > 0:
                 return ()
             if not colored_only or does_value_need_color(triple.l_val):
@@ -322,6 +320,8 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                 open_block_set.append(o_b)
 
     def is_dominated_by(b, dom):
+        if b == dom:
+            return True
         b1 = dom_map[b]
         while b1 is not None:
             if b1 == dom:
@@ -345,6 +345,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
         # print(blocks_in)
         loop_invariants = set()
         loop_defines = {}
+        loop_uses = {}
         for b in blocks_in:
             for t in b.trips:
                 defs = get_defines(t)
@@ -352,6 +353,11 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                     if d not in loop_defines:
                         loop_defines[d] = []
                     loop_defines[d].append(t)
+                uses = get_uses(t)
+                for u in uses:
+                    if u not in loop_uses:
+                        loop_uses[u] = []
+                    loop_uses[u].append(t)
         while True:
             len_invariants = len(loop_invariants)
             for b in blocks_in:
@@ -381,7 +387,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
             if inv.typ == TripleValueType.TRIPLE_REF and b1.trips[0].index <= inv.value.index <= b2.trips[-1].index :
                 loop_pre_header.append(inv.value)
                 
-        basic_induction_vars = []
+        basic_induction_vars = {}
 
         for d,t_l in loop_defines.items():
             if len(t_l) == 1:
@@ -393,9 +399,23 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                             const_vals = [v for v in (t.l_val, t.r_val) if v in loop_invariants]
                             var_vals = [v for v in (t.l_val, t.r_val) if triple_values_equal(v, d)]
                             if len(const_vals) == 1 and len(var_vals) == 1:
-                                basic_induction_vars.append(d)
+                                basic_induction_vars[d] = const_vals[0].value
         
         # print(basic_induction_vars)
+
+        remove_induction = []
+
+        for b in basic_induction_vars:
+            if b in loop_uses and len(loop_uses[b]) == 1:
+                # Useless induction var within the loop, check outside the loop
+                is_useless = True
+                for bl in blocks_in:
+                    for out_bl in bl.out_blocks:
+                        if out_bl not in blocks_in and b in out_bl.in_vals:
+                            is_useless = False
+                            break
+                if is_useless:
+                    remove_induction.append(loop_uses[b][0])
 
         derived_induction_vars = {}
 
@@ -403,7 +423,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
             if t.typ == TripleType.BINARY_OP:
                 if t.op in [Operator.MULTIPLY, Operator.PLUS, Operator.SHIFT_LEFT, Operator.MINUS]:
                     # TODO: Support non-constant derived modifiers
-                    const_vals = [v for v in (t.l_val, t.r_val) if v in loop_invariants and v.typ == TripleValueType.CONSTANT]
+                    const_vals = [v for v in (t.l_val, t.r_val) if v in loop_invariants]
                     var_vals = [v for v in (t.l_val, t.r_val) if v in basic_induction_vars]
                     trip_ref_vals = [v for v in (t.l_val, t.r_val) if v not in loop_invariants and v.typ == TripleValueType.TRIPLE_REF]
                     if len(const_vals) == 1:
@@ -414,7 +434,10 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                                 case Operator.PLUS:
                                     return [(var_vals[0], 0, 1, const_vals[0], 0)]
                                 case Operator.MINUS:
-                                    return [(var_vals[0], 0, 1, 0, const_vals[0])]
+                                    if const_vals[0] == t.l_val:
+                                        return [(var_vals[0], 0, -1, const_vals[0], 0)]
+                                    else:
+                                        return [(var_vals[0], 0, 1, 0, const_vals[0])]
                                 case Operator.SHIFT_LEFT:
                                     return [(var_vals[0], const_vals[0], 1, 0, 0)]
                                 case _:
@@ -446,48 +469,94 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                 elif d.typ == TripleValueType.TRIPLE_REF:
                     trip = d.value
                 if trip is not None:
-                    res = is_linear_on_basic(trip)
+                    res = is_linear_on_basic(trip, shallow=True)
                     if res is not None:
                         a = 1
                         b = 0
+                        c = None
+                        d_ = None
                         v = None
                         for r in res:
                             v = r[0]
-                            assert all([isinstance(val, int) or val.typ == TripleValueType.CONSTANT for val in r[1:]])
-                            vals = [val if isinstance(val, int) else val.value for val in r[1:]]
-                            a *= 2 ** vals[0]
-                            a *= vals[1]
-                            b += vals[2]
-                            b -= vals[3]
+                            if isinstance(r[1], int):
+                                a *= 2 ** r[1]
+                            elif r[1].typ == TripleValueType.CONSTANT:
+                                a *= 2 ** r[1].value
+                            else:
+                                assert False
+                            if isinstance(r[2], int):
+                                a *= r[2]
+                            elif r[2].typ == TripleValueType.CONSTANT:
+                                a *= r[2].value
+                            else:
+                                assert False
+                            if isinstance(r[3], int):
+                                b += r[3]
+                            elif r[3].typ == TripleValueType.CONSTANT:
+                                b += r[3].value
+                            else:
+                                c = r[3]
+                            if isinstance(r[4], int):
+                                b -= r[4]
+                            elif r[4].typ == TripleValueType.CONSTANT:
+                                b -= r[4].value
+                            else:
+                                d_ = r[4]
                         assert v is not None
-                        derived_induction_vars[d] = (v, a, b)
+                        derived_induction_vars[d] = (v, a, b, c, d_)
 
         # print(derived_induction_vars)
         ind_defines = []
         ind_step_trips = []
-        for d,(v,a,b) in derived_induction_vars.items():
-            if d.typ != TripleValueType.VAR_REF:
+        for d,(v,a,b,c,d_) in derived_induction_vars.items():
+            if d.typ == TripleValueType.TRIPLE_REF:
+                if a == 1 and c is None and d_ is None:
+                    continue
+            elif d.typ != TripleValueType.VAR_REF:
                 continue
             t = None
             basic_var = v
             new_varname = f"${d}_inductive"
-            if a != 1:
-                t = Triple(TripleType.BINARY_OP, Operator.MULTIPLY, v, create_const_value(a))
+            if a == -1 and b != 0:
+                t = Triple(TripleType.BINARY_OP, Operator.MINUS, create_const_value(b), v)
                 v = create_tref_value(t)
                 loop_pre_header.append(t)
-            if b != 0:
-                t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, create_const_value(b))
+            else:
+                if a != 1:
+                    t = Triple(TripleType.BINARY_OP, Operator.MULTIPLY, v, create_const_value(a))
+                    v = create_tref_value(t)
+                    loop_pre_header.append(t)
+                if b != 0:
+                    t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, create_const_value(b))
+                    v = create_tref_value(t)
+                    loop_pre_header.append(t)
+            if c is not None:
+                t = Triple(TripleType.BINARY_OP, Operator.PLUS, v, c)
+                v = create_tref_value(t)
+                loop_pre_header.append(t)
+            if d_ is not None:
+                t = Triple(TripleType.BINARY_OP, Operator.MINUS, v, d_)
                 v = create_tref_value(t)
                 loop_pre_header.append(t)
             t = Triple(TripleType.ASSIGN, None, create_var_assign_value(new_varname), v)
             v = create_tref_value(t)
             loop_pre_header.append(t)
-            loop_define = loop_defines[d][0]
-            loop_define.r_val = create_var_ref_value(new_varname)
-            ind_defines.append(loop_define)
+            if d.typ == TripleValueType.VAR_REF:
+                loop_define = loop_defines[d][0]
+                loop_define.r_val = create_var_ref_value(new_varname)
+                ind_defines.append(loop_define)
+            elif d.typ == TripleValueType.TRIPLE_REF:
+                loop_define = loop_defines[d][0]
+                loop_define.typ = TripleType.NOP_REF
+                loop_define.op = None
+                loop_define.l_val = create_var_ref_value(new_varname)
+                loop_define.r_val = None
+                ind_defines.append(loop_define)
+            else:
+                assert False
 
             ind = loop_defines[basic_var][0].index + 1
-            t = Triple(TripleType.BINARY_OP, Operator.PLUS, create_var_ref_value(new_varname), create_const_value(a))
+            t = Triple(TripleType.BINARY_OP, Operator.PLUS, create_var_ref_value(new_varname), create_const_value(a * basic_induction_vars[basic_var]))
             t.index = ind
             triple_inserts.append(t)
             ind_step_trips.append(t)
@@ -528,8 +597,11 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
             ADD_HINTS[t] = "Inductive step"
         for t in new_labels:
             ADD_HINTS[t] = "Loop pre-header"
+        for t in remove_induction:
+            trips.remove(t)
+            REMOVAL_HINTS[t] = "Useluess induction variable"
 
-        if len(triple_inserts) > 0 or len(loop_pre_header) > 0:
+        if len(triple_inserts) > 0 or len(loop_pre_header) > 0 or len(remove_induction) > 0:
             return True
 
     return False
