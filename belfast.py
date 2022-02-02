@@ -157,6 +157,8 @@ def parse_tokens(tokens: List[Token]):
 
     declared_vars: Set[str] = set()
 
+    global_vars: Set[str] = set()
+
     declared_funs: Dict[str, ASTNode_Base] = {}
     defining_function = False
     defining_fun_body = []
@@ -197,15 +199,21 @@ def parse_tokens(tokens: List[Token]):
         var_tok = expect_keyword(Keyword.VAR)
         ident_tok = expect_token(TokenType.IDENTIFIER)
         assert isinstance(ident_tok.value, str), "Expected string identifier value"
-        if ident_tok.value in declared_vars:
-            compiler_error(ident_tok.loc, f"Redeclaration of existing variable {ident_tok.value}")
-        declared_vars.add(ident_tok.value)
-        tok = tokens[index]
-        if tok.typ == TokenType.ASSIGN:
-            expect_token(TokenType.ASSIGN)
-            exp = parse_expression()
-            return ASTNode_VardecAssign(ASTType.VAR_DECL_ASSIGN, var_tok, ident_tok.value, exp)
-        return ASTNode_Ident(ASTType.VAR_DECL, var_tok, ident_tok.value)
+        if defining_function:
+            if ident_tok.value in declared_vars:
+                compiler_error(ident_tok.loc, f"Redeclaration of existing variable {ident_tok.value}")
+            declared_vars.add(ident_tok.value)
+            tok = tokens[index]
+            if tok.typ == TokenType.ASSIGN:
+                expect_token(TokenType.ASSIGN)
+                exp = parse_expression()
+                return ASTNode_VardecAssign(ASTType.VAR_DECL_ASSIGN, var_tok, ident_tok.value, exp)
+            return ASTNode_Ident(ASTType.VAR_DECL, var_tok, ident_tok.value)
+        else:
+            if ident_tok.value in global_vars:
+                compiler_error(ident_tok.loc, f"Redeclaration of existing global {ident_tok.value}")
+            global_vars.add(ident_tok.value)
+            return ASTNode_Ident(ASTType.VAR_DECL, var_tok, ident_tok.value)
 
     def parse_print_stmt():
         print_tok = expect_keyword(Keyword.PRINT)
@@ -467,8 +475,8 @@ def parse_tokens(tokens: List[Token]):
     def parse_function_def():
         nonlocal index, defining_function, defining_fun_body, defining_function_args
         tok = expect_keyword(Keyword.FUN)
-        if len(declared_vars):
-            compiler_error(tok.loc, "Variables declared outside of function")
+        # if len(declared_vars):
+        #     compiler_error(tok.loc, "Variables declared outside of function")
         
         declared_vars.clear()
 
@@ -578,6 +586,8 @@ def parse_tokens(tokens: List[Token]):
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
                 elif t.value in declared_funs:
                     return parse_funcall(t)
+                elif t.value in global_vars:
+                    return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
                 elif t.value in declared_consts:
                     return declared_consts[t.value]
                 else:
@@ -643,7 +653,7 @@ def parse_tokens(tokens: List[Token]):
         file_tok = expect_token(TokenType.STRING)
         inc_a, inc_vars, inc_funs, inc_consts, inc_structs = file_to_ast(file_tok.value)
         ast.extend(inc_a)
-        declared_vars.update(inc_vars)
+        global_vars.update(inc_vars)
         declared_funs.update(inc_funs)
         declared_consts.update(inc_consts)
         declared_structs.update(inc_structs)
@@ -715,12 +725,14 @@ def parse_tokens(tokens: List[Token]):
                         parse_include()
                     case Keyword.STRUCT:
                         parse_struct()
+                    case Keyword.VAR:
+                        ast.append(parse_var_decl())
                     case _:
                         compiler_error(tokens[index].loc, f"Unexpected keyword {tokens[index].value.name}")
             case _:
                 compiler_error(tokens[index].loc, f"Unexpected token {tokens[index].typ.name}")
     
-    return ast, declared_vars, declared_funs, declared_consts, declared_structs
+    return ast, global_vars, declared_funs, declared_consts, declared_structs
 
 def print_ast(ast:ASTNode_Base, indent=0):
     indent_str = ' | ' * indent

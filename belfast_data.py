@@ -344,6 +344,8 @@ class TripleValueType(Enum):
     FUN_LABEL = auto()
     ON_STACK = auto()
     ADDRESS_COMPUTE = auto()
+    GLOBAL_REF = auto()
+    GLOBAL_LABEL = auto()
 
 @dataclass
 class TripleValue:
@@ -381,6 +383,10 @@ def trip_val_to_str(tv:TripleValue, as_hex=False):
         case TripleValueType.UNKNOWN:
             return "UNKNOWN"
         case TripleValueType.FUN_LABEL:
+            return f"_{tv.value}"
+        case TripleValueType.GLOBAL_REF:
+            return f"[_{tv.value}]"
+        case TripleValueType.GLOBAL_LABEL:
             return f"_{tv.value}"
         case TripleValueType.ON_STACK:
             return f"[rsp+{tv.value}]"

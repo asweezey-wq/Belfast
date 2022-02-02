@@ -513,6 +513,10 @@ def triple_value_str(tv: TripleValue, trip_ctx: TripleContext, as_hex=False, siz
             return f"_{tv.value}"
         case TripleValueType.ON_STACK:
             return f"qword [rsp+{tv.value}]"
+        case TripleValueType.GLOBAL_REF:
+            return f"qword [_{tv.value}]"
+        case TripleValueType.GLOBAL_LABEL:
+            return f"_{tv.value}"
         case _:
             assert False, f"Type {tv.typ.name} not implemented"
 
@@ -623,6 +627,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                 case TripleType.BINARY_OP:
                     should_be_same_inout = t.op not in [Operator.MODULUS, Operator.PLUS] + list(CMP_OP_INSTR_MAP.keys())
                     switch_lr = False
+                    can_handle_mem_lhs = t.op in CMP_OP_INSTR_MAP and t.flags & TF_BOOL_FORWARDED
                     if t.op != Operator.PLUS:
                         if (lv.typ in [TripleValueType.CONSTANT] or (lv.typ == TripleValueType.REGISTER and t_reg is not None and should_be_same_inout and lv.value != t_reg)):
                             if t_reg is not None:
@@ -661,7 +666,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                         if switch_lr:
                             assert rv.typ == TripleValueType.REGISTER, "Expected RHS to be in a register"
                         else:
-                            assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
+                            assert lv.typ == TripleValueType.REGISTER or (can_handle_mem_lhs and lv.typ in [TripleValueType.ON_STACK, TripleValueType.GLOBAL_REF]), "Expected LHS to be in a register"
                     match t.op:
                         case Operator.PLUS:
                             assert t_reg is not None, "Expected this value to be assigned to a register"
@@ -772,7 +777,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                 case TripleType.STORE:
                     assert rv.typ in [TripleValueType.REGISTER, TripleValueType.CONSTANT], "Expected STORE RHS to be a constant or register"
                     mem_word = MEM_WORD_SIZE_MAP[t.size]
-                    if lv.typ in [TripleValueType.REGISTER, TripleValueType.STRING_REF, TripleValueType.BUFFER_REF, TripleValueType.LOCAL_BUFFER_REF]:
+                    if lv.typ in [TripleValueType.REGISTER, TripleValueType.STRING_REF, TripleValueType.BUFFER_REF, TripleValueType.LOCAL_BUFFER_REF, TripleValueType.GLOBAL_LABEL]:
                         code_stats.mem_stores += 1
                         code_stats.mov_ops += 1
                         write_asm(f"mov {mem_word} [{triple_value_str(lv, trip_ctx)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
@@ -807,6 +812,8 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                                 write_asm(f"mov {mem_word} [{triple_value_str(la, trip_ctx)}{'+' if pos == 1 else '-'}{triple_value_str(ra, trip_ctx)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
                             else:
                                 assert False
+                    else:
+                        assert False, f"Unhandled value type {lv.typ.name}"
                 case TripleType.LOAD:
                     assert t_reg is not None, "Expected this value to be assigned to a register"
                     mem_word = MEM_WORD_SIZE_MAP[t.size]
@@ -926,23 +933,24 @@ def get_asm_footer(trip_ctx: TripleContext, called_funs: Set[str]):
 
     all_buffers = dict(trip_ctx.buffers)
     all_strings = dict(trip_ctx.strings)
+    all_global_vars = set(trip_ctx.declared_vars)
     for f in called_funs:
         c = trip_ctx.function_ctx[f]
         all_buffers.update(c.buffers)
         all_strings.update(c.strings)
 
-    # if len(trip_ctx.var_table) > 0:
-    #     asm += "\n\tsegment .bss\n"
-    #     did_segment = True
-    #     for v,loc in ctx.var_table.items():
-    #         asm += f"{loc.value}: resb 8\n"
+    if len(all_global_vars) > 0:
+        asm += "\n\tsegment .bss\n"
+        did_segment = True
+        for v in all_global_vars:
+            asm += f"_{v}: resb 8\n"
     
-    if len(all_buffers) > 0:
-        if not did_segment:
-            asm += "\tsegment .bss\n"
-            did_segment = True
-        for b,sz in all_buffers.items():
-            asm += f"{b}: resb {sz}\n"
+    # if len(all_buffers) > 0:
+    #     if not did_segment:
+    #         asm += "\tsegment .bss\n"
+    #         did_segment = True
+    #     for b,sz in all_buffers.items():
+    #         asm += f"{b}: resb {sz}\n"
 
     if len(all_strings) > 0:
         asm += "\tsegment .data\n"

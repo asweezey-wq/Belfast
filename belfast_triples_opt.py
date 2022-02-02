@@ -687,12 +687,19 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                             ld = dominance_map[ld]
                         if last_match is not None:
                             has_changed = False
-                            if last_match.l_val and last_match.l_val.typ == TripleValueType.VAR_REF:
-                                if find_assign_between(last_match, tref, last_match.l_val.value) is not None:
+                            if last_match.l_val:
+                                if last_match.l_val.typ == TripleValueType.VAR_REF:
+                                    if find_assign_between(last_match, tref, last_match.l_val.value) is not None:
+                                        has_changed = True
+                                elif last_match.l_val.typ in [TripleValueType.GLOBAL_REF,]:
                                     has_changed = True
-                            if last_match.r_val and last_match.r_val.typ == TripleValueType.VAR_REF:
-                                if find_assign_between(last_match, tref, last_match.r_val.value) is not None:
+                            if last_match.r_val:
+                                if last_match.r_val.typ == TripleValueType.VAR_REF:
+                                    if find_assign_between(last_match, tref, last_match.r_val.value) is not None:
+                                        has_changed = True
+                                elif last_match.r_val.typ in [TripleValueType.GLOBAL_REF,]:
                                     has_changed = True
+                                
                             if not has_changed:
                                 tv.value = last_match
                                 REMOVAL_HINTS[t] = "Common expression"

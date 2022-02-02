@@ -67,7 +67,7 @@ fun puth h do
     store8(buf+(30-cnt), '0')
     cnt = cnt + 2
 
-    syscall(0x2000004, 1, buf + (32 - cnt), cnt+1)
+    syscall(0x2000004, 1, buf + (32 - cnt), cnt)
 end
 
 fun strlen s do

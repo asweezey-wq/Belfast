@@ -10,6 +10,7 @@ class TripleContext:
 
     def __init__(self):
         self.declared_vars: Set[str] = set()
+        self.globals : Set[str] = set()
         self.functions = {}
         self.function_ctx = {}
         self.buffers: Dict[str, int] = {}
@@ -29,7 +30,7 @@ class TripleContext:
         self.has_generated_print_code = False
 
     def variable_exists(self, name:str):
-        return name in self.declared_vars
+        return name in self.declared_vars or name in self.globals
 
     def declare_variable(self, name:str):
         self.declared_vars.add(name)
@@ -49,6 +50,7 @@ class TripleContext:
         tctx.active_break_label = self.active_break_label
         tctx.function_return_label = self.function_return_label
         tctx.function_return_var = self.function_return_var
+        tctx.globals = self.globals
         return tctx
 
     def return_from_subctx(self, subctx: 'TripleContext'):
@@ -216,17 +218,25 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             if not ctx.variable_exists(ast.ident_str):
                 # TODO: Move this to parsing step?
                 compiler_error(ast.value.loc, f"Use of undeclared variable {ast.ident_str}")
-            trip_val = create_var_ref_value(ast.ident_str)
+            if ast.ident_str in ctx.declared_vars:
+                trip_val = create_var_ref_value(ast.ident_str)
+            elif ast.ident_str in ctx.globals:
+                trip_val = create_global_ref_value(ast.ident_str)
         case ASTType.BUFFER_ALLOC:
             trip_val = TripleValue(TripleValueType.LOCAL_BUFFER_REF, ctx.allocate_local_buffer(ast.num_value))
         case ASTType.ASSIGN:
             l_trips, l_trip_val = ast_to_triples(ast.l_ast, ctx)
             assert len(l_trips) == 0, "Multiple triples on Assign LHS not supported"
-            assert l_trip_val.typ == TripleValueType.VAR_REF, "Expected variable ref on LHS of Assign"
-            r_trips, r_trip_val = ast_to_triples(ast.r_ast, ctx)
-            triples.extend(r_trips)
-            triples.append(Triple(TripleType.ASSIGN, op=None, l_val=create_var_assign_value(l_trip_val.value), r_val=r_trip_val))
-            trip_val = create_tref_value(triples[-1])
+            if l_trip_val.typ == TripleValueType.GLOBAL_REF:
+                r_trips, r_trip_val = ast_to_triples(ast.r_ast, ctx)
+                triples.extend(r_trips)
+                triples.append(Triple(TripleType.STORE, op=None, l_val=create_global_label_value(l_trip_val.value), r_val=r_trip_val))
+            else:
+                assert l_trip_val.typ == TripleValueType.VAR_REF, "Expected variable ref on LHS of Assign"
+                r_trips, r_trip_val = ast_to_triples(ast.r_ast, ctx)
+                triples.extend(r_trips)
+                triples.append(Triple(TripleType.ASSIGN, op=None, l_val=create_var_assign_value(l_trip_val.value), r_val=r_trip_val))
+            # trip_val = create_tref_value(triples[-1])
         case ASTType.IF:
             cond_trips, cond_val = ast_to_triples(ast.cond_ast, ctx)
             scoped_ctx = ctx.create_subctx()
@@ -317,6 +327,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             scoped_ctx.buffer_offs = len(ctx.buffers) + ctx.buffer_offs
             scoped_ctx.string_offs = len(ctx.strings) + ctx.string_offs
             scoped_ctx.declared_vars.update(args)
+            scoped_ctx.globals = ctx.declared_vars
             scoped_ctx.ctx_name = fun_name
             end_label = Triple(TripleType.LABEL, None, None, None)
             scoped_ctx.function_return_label = end_label
@@ -367,6 +378,12 @@ def create_register_value(reg: int):
 
 def create_var_ref_value(var: str):
     return TripleValue(TripleValueType.VAR_REF, var)
+
+def create_global_ref_value(var: str):
+    return TripleValue(TripleValueType.GLOBAL_REF, var)
+
+def create_global_label_value(var: str):
+    return TripleValue(TripleValueType.GLOBAL_LABEL, var)
 
 def create_var_assign_value(var: str):
     return TripleValue(TripleValueType.VAR_ASSIGN, var)
