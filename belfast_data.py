@@ -172,6 +172,7 @@ class ASTType(Enum):
     PRINT = auto()
     IF = auto()
     WHILE = auto()
+    DO_WHILE = auto()
     SYSCALL = auto()
     BUFFER_ALLOC = auto()
     LOAD = auto()

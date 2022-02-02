@@ -282,6 +282,23 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             triples.append(Triple(TripleType.GOTO, op=None, l_val=create_target_value(cond_eval_label), r_val=None))
             triples.append(end_label_triple)
             ctx.return_from_subctx(scoped_ctx)
+        case ASTType.DO_WHILE:
+            loop_start_label = Triple(TripleType.LABEL, None, None, None)
+            triples.append(loop_start_label)
+            scoped_ctx = ctx.create_subctx()
+            end_label_triple = Triple(TripleType.LABEL, None, None, None)
+            scoped_ctx.active_break_label = end_label_triple
+            cond_eval_label = Triple(TripleType.LABEL, None, None, None)
+            scoped_ctx.active_continue_label = cond_eval_label
+            for a in ast.do_ast_block:
+                a_trips, _ = ast_to_triples(a, scoped_ctx)
+                triples.extend(a_trips)
+            cond_trips, cond_val = ast_to_triples(ast.cond_ast, ctx)
+            triples.append(cond_eval_label)
+            triples.extend(cond_trips)
+            triples.append(Triple(TripleType.IF_COND, op=Operator.EQ, l_val=cond_val, r_val=create_target_value(loop_start_label)))
+            triples.append(end_label_triple)
+            ctx.return_from_subctx(scoped_ctx)
         case ASTType.BREAK:
             if ctx.active_break_label:
                 triples.append(Triple(TripleType.GOTO, op=None, l_val=create_target_value(ctx.active_break_label), r_val=None))

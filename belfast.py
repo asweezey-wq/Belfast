@@ -284,6 +284,25 @@ def parse_tokens(tokens: List[Token]):
         expect_keyword(Keyword.END)
         return ASTNode_While(ASTType.WHILE, tok, cond_exp, body)
 
+    def parse_do_while_loop():
+        nonlocal index
+        tok = expect_keyword(Keyword.DO)
+        body: List[ASTNode_Base] = []
+        while True:
+            tok = tokens[index]
+            if tokens[index].typ == TokenType.EOL:
+                index += 1
+                continue
+            if tok.typ == TokenType.EOF or (tok.typ == TokenType.KEYWORD and tok.value == Keyword.WHILE):
+                break
+            s = parse_statement()
+            if s and s.typ != ASTType.NONE:
+                body.append(s)
+        expect_keyword(Keyword.WHILE)
+        cond_exp = parse_expression()
+        expect_keyword(Keyword.END)
+        return ASTNode_While(ASTType.DO_WHILE, tok, cond_exp, body)
+
     def parse_syscall():
         nonlocal index
         tok = expect_keyword(Keyword.SYSCALL)
@@ -674,6 +693,8 @@ def parse_tokens(tokens: List[Token]):
                         return_ast = parse_syscall()
                     case Keyword.WHILE:
                         return_ast = parse_while_loop()
+                    case Keyword.DO:
+                        return_ast = parse_do_while_loop()
                     case Keyword.BUFFER:
                         return_ast = parse_buffer_alloc()
                     case Keyword.STORE | Keyword.STOREF | Keyword.STORE8 | Keyword.STORE16 | Keyword.STORE32 | Keyword.STORE64:
