@@ -1,0 +1,16 @@
+include "stdlib.bl"
+
+fun fib i do
+    if i <= 1 then
+        return i
+    end
+    return fib(i - 1) + fib(i - 2) 
+end
+
+fun main do
+    var i = 0
+    do
+        putu(fib(i))
+        i = i + 1
+    while i < 10 end
+end
