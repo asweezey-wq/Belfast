@@ -627,6 +627,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                 case TripleType.BINARY_OP:
                     should_be_same_inout = t.op not in [Operator.MODULUS, Operator.PLUS] + list(CMP_OP_INSTR_MAP.keys())
                     switch_lr = False
+                    did_xchg = False
                     can_handle_mem_lhs = t.op in CMP_OP_INSTR_MAP and t.flags & TF_BOOL_FORWARDED
                     if t.op != Operator.PLUS:
                         if (lv.typ in [TripleValueType.CONSTANT] or (lv.typ == TripleValueType.REGISTER and t_reg is not None and should_be_same_inout and lv.value != t_reg)):
@@ -640,6 +641,7 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                                         temp = rv
                                         rv = lv
                                         lv = temp
+                                        did_xchg = True
                                 else:
                                     stat_move(lv, code_stats)
                                     write_asm(move_instr(t_reg, lv, trip_ctx))
@@ -695,6 +697,11 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                                 write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(lv, trip_ctx)}")
                             else:
                                 write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(rv, trip_ctx)}")
+                            if did_xchg:
+                                if t.op == Operator.MINUS:
+                                    write_asm(f"add {triple_value_str(rv, trip_ctx)}, {reg_str_for_size(t_reg)}")
+                                else:
+                                    assert False, f"XCHG on unknown operator {t.op.name}"
                         case Operator.GE | Operator.LE | Operator.GT | Operator.LT | Operator.NE | Operator.EQ:
                             assert t_reg is not None or (t.flags & TF_BOOL_FORWARDED) > 0, "Expected this value to be assigned to a register or forwarded to next operation"
                             if switch_lr:

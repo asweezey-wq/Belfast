@@ -1,0 +1,99 @@
+include "stdmem.bl"
+include "stdlib.bl"
+
+struct list
+    size 4
+    el_size 4
+    cap 4
+    list_ptr 8 // We point to allocated memory that contains the data
+end
+
+fun num_list_init l do
+    const DEFAULT_CAP = 8
+    storef(list.size, l, 0)
+    storef(list.cap, l, DEFAULT_CAP)
+    storef(list.el_size, l, SIZE_NUM)
+    storef(list.list_ptr, l, belloc(DEFAULT_CAP * SIZE_NUM))
+    return 0
+end
+
+fun num_list_resize l new_size do
+    var el_size = loadf(list.el_size, l)
+    var new_cap_bytes = new_size * el_size
+    var old_ptr = loadf(list.list_ptr, l)
+    var new_ptr = belloc(new_cap_bytes)
+    memcpy(new_ptr, old_ptr, el_size * loadf(list.size, l))
+    storef(list.list_ptr, l, new_ptr)
+    storef(list.cap, l, new_size)
+    blfree(old_ptr)
+    return 0
+end
+
+fun num_list_append l a do
+    var list_size = loadf(list.size, l)
+    if list_size >= loadf(list.cap, l) then
+        num_list_resize(l, list_size * 2)
+    end
+    var ptr = loadf(list.list_ptr, l) + list_size * loadf(list.el_size, l)
+    store64(ptr, a)
+    storef(list.size, l, list_size + 1)
+end
+
+fun num_list_get l i do
+    return load64(loadf(list.list_ptr, l) + loadf(list.el_size, l) * i)
+end
+
+fun num_list_remove l i do
+    var list_size = loadf(list.size, l)
+    var el_size = loadf(list.el_size, l)
+    var item_ptr = loadf(list.list_ptr, l) + el_size * i
+    var cpy_len = el_size * (list_size - i - 1)
+    var next_ptr = item_ptr + el_size
+    memcpy(item_ptr, next_ptr, cpy_len)
+    storef(list.size, l, list_size - 1)
+end
+
+fun num_list_insert l i a do
+    var list_size = loadf(list.size, l)
+    var list_cap = loadf(list.cap, l)
+    if list_size >= list_cap then
+        num_list_resize(l, list_size * 2)
+    end
+    var el_size = loadf(list.el_size, l)
+    var item_ptr = loadf(list.list_ptr, l) + el_size * i
+    var cpy_len = el_size * (list_size - i)
+    var next_ptr = item_ptr + el_size
+    var tempbuf = belloc(cpy_len)
+    memcpy(tempbuf, item_ptr, cpy_len)
+    memcpy(next_ptr, tempbuf, cpy_len)
+    blfree(tempbuf)
+    store64(item_ptr, a)
+    storef(list.size, l, list_size + 1)
+end
+
+fun main do
+    var num_list = buffer(sizeof(list))
+    num_list_init(num_list)
+    const N = 24
+    var i = 0
+    while i < N do
+        num_list_append(num_list, i * i)
+        i = i + 1
+    end
+    i = 0
+    num_list_remove(num_list, 0)
+    while i < loadf(list.size, num_list) do
+        var item = num_list_get(num_list, i)
+        if item % 2 != 0 then
+            num_list_remove(num_list, i)
+            continue
+        end
+        i = i + 1
+    end
+    num_list_insert(num_list, 0, 0)
+    i = 0
+    while i < loadf(list.size, num_list) do
+        putd(num_list_get(num_list, i))
+        i = i + 1
+    end
+end

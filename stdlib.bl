@@ -88,6 +88,16 @@ fun memset val ptr len do
     end
 end
 
+fun memcpy dst_ptr src_ptr len do
+    var i = 0
+    while i < len do
+        store8(dst_ptr, load8(src_ptr))
+        dst_ptr = dst_ptr + 1
+        src_ptr = src_ptr + 1
+        i = i + 1
+    end
+end
+
 const STDOUT_FILENO = 1;
 const STDIN_FILENO = 1;
 const STDERR_FILENO = 2;

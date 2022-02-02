@@ -329,15 +329,16 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
             b1 = dom_map[b1]
         return False
 
-    loops: Set[Tuple[TripleBlock, TripleBlock]] = set()
+    loops: Dict[TripleBlock, TripleBlock] = {}
 
     for b in blocks:
         dom_edges = [e for e in b.out_blocks if is_dominated_by(b, e)]
         if len(dom_edges) > 0:
             assert len(dom_edges) == 1
-            loops.add((dom_edges[0], b))
+            if dom_edges[0] not in loops or b.index > loops[dom_edges[0]].index:
+                loops[dom_edges[0]] = b
 
-    for b1,b2 in loops:
+    for b1,b2 in loops.items():
         # print(f'Loop from {b1.trips[0].index} to {b2.trips[-1].index}')
         blocks_in = [b for b in blocks if b1.index <= b.index <= b2.index]
         # TODO: better block in loop checks
@@ -360,6 +361,8 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                         if u.typ == TripleValueType.CONSTANT:
                             loop_invariants.add(u)
                         elif u.typ == TripleValueType.TRIPLE_REF:
+                            if u.value.typ in [TripleType.LOAD,]:
+                                continue
                             sub_uses = get_uses(u.value, colored_only=False)
                             if all([use in loop_invariants for use in sub_uses]):
                                 loop_invariants.add(u)
@@ -375,7 +378,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
         triple_inserts = []
 
         for inv in loop_invariants:
-            if inv.typ == TripleValueType.TRIPLE_REF:
+            if inv.typ == TripleValueType.TRIPLE_REF and b1.trips[0].index <= inv.value.index <= b2.trips[-1].index :
                 loop_pre_header.append(inv.value)
                 
         basic_induction_vars = []
