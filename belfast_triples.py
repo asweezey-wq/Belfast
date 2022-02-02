@@ -322,6 +322,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             for i,a in enumerate(arg_vals):
                 triples.append(Triple(TripleType.ARG, None, a, None, data=i, flags=TF_SYSCALL))
             triples.append(Triple(TripleType.SYSCALL, op=None, l_val=s_val, r_val=None, data=len(ast.args)-1))
+            triples.append(Triple(TripleType.NOP_REF, None, create_tref_value(triples[-1]), None, flags=TF_DONT_FORWARD))
             trip_val = create_tref_value(triples[-1])
         case ASTType.LOAD:
             ptr_exp_trips, ptr_exp_val = ast_to_triples(ast.ptr_exp, ctx)
@@ -370,6 +371,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             for i,a in enumerate(arg_vals):
                 triples.append(Triple(TripleType.ARG, None, a, None, data=i))
             triples.append(Triple(TripleType.CALL, None, TripleValue(TripleValueType.FUN_LABEL, fun_name), None, data=len(ast.args)))
+            triples.append(Triple(TripleType.NOP_REF, None, create_tref_value(triples[-1]), None, flags=TF_DONT_FORWARD))
             trip_val = create_tref_value(triples[-1])
         case ASTType.RETURN:
             assert ctx.function_return_label is not None and ctx.function_return_var is not None

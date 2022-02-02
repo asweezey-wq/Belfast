@@ -659,14 +659,14 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                                     did_change = True
                 if t.l_val is not None and t.l_val.typ == TripleValueType.TRIPLE_REF:
                     l_trip = t.l_val.value
-                    if l_trip.typ == TripleType.NOP_REF:
+                    if l_trip.typ == TripleType.NOP_REF and (l_trip.flags & TF_DONT_FORWARD) == 0:
                         t.l_val = l_trip.l_val
                         REMOVAL_HINTS[t] = "Value forwarded"
                         ADD_HINTS[t] = "Value forwarded"
                         did_change = True
                 if t.r_val is not None and t.r_val.typ == TripleValueType.TRIPLE_REF:
                     r_trip = t.r_val.value
-                    if r_trip.typ == TripleType.NOP_REF:
+                    if r_trip.typ == TripleType.NOP_REF and (r_trip.flags & TF_DONT_FORWARD) == 0:
                         t.r_val = r_trip.l_val
                         REMOVAL_HINTS[t] = "Value forwarded"
                         ADD_HINTS[t] = "Value forwarded"

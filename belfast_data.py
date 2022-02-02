@@ -400,6 +400,7 @@ TF_SIGNED = 1 # Indicates a signed operation
 TF_BOOL_FORWARDED = 2 # Forwarded booleans are used immediately afterwards in a jump
 TF_REMOVE = 4 # Should remove
 TF_SYSCALL = 8 # to specify a syscall arg
+TF_DONT_FORWARD = 16
 
 @dataclass(eq=False)
 class Triple:

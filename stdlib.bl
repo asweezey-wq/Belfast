@@ -27,22 +27,16 @@ fun putd d do
     syscall(0x2000004, 1, putd_buf + (32 - putd_cnt), putd_cnt)
 end
 
-fun putu d do
+fun putu i do
     var buf = buffer(32)
-    store8(buf+31, 0x0A)
-    var cnt = 1;
-    if d != 0 then
-        while d > 0 do
-            store8(buf+(31-cnt), 0x30 + (d % 10))
-            d = d / 10
-            cnt = cnt + 1
-        end
-    else
-        cnt = 2;
-        store8(buf+30, 0x30)
-    end
-
-    syscall(0x2000004, 1, buf + (32 - cnt), cnt)
+    store8(buf + 31, '\n')
+    var j = 1
+    do
+        store8(buf + (31 - j), 0x30 + i % 10)
+        i = i / 10
+        j = j + 1
+    while i end
+    syscall(0x2000004, 1, buf + (32 - j), j)
 end
 
 fun puth h do

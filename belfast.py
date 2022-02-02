@@ -161,6 +161,7 @@ def parse_tokens(tokens: List[Token]):
 
     declared_funs: Dict[str, ASTNode_Base] = {}
     defining_function = False
+    defining_function_name = ''
     defining_fun_body = []
     defining_function_args = []
 
@@ -492,7 +493,7 @@ def parse_tokens(tokens: List[Token]):
         return ASTNode_Number(ASTType.NUMBER, tok, sz)
 
     def parse_function_def():
-        nonlocal index, defining_function, defining_fun_body, defining_function_args
+        nonlocal index, defining_function, defining_fun_body, defining_function_args, defining_function_name
         tok = expect_keyword(Keyword.FUN)
         # if len(declared_vars):
         #     compiler_error(tok.loc, "Variables declared outside of function")
@@ -516,6 +517,7 @@ def parse_tokens(tokens: List[Token]):
         expect_keyword(Keyword.DO)
 
         defining_function = True
+        defining_function_name = ident_tok.value
         defining_fun_body = []
         defining_function_args = args
 
@@ -537,6 +539,7 @@ def parse_tokens(tokens: List[Token]):
         declared_funs[ident_tok.value] = fundef
         defining_fun_body = []
         defining_function_args = []
+        defining_function_name = ''
 
         declared_vars.clear()
 
@@ -544,10 +547,13 @@ def parse_tokens(tokens: List[Token]):
 
     def parse_funcall(t: Token):
         nonlocal index
-        assert t.typ == TokenType.IDENTIFIER and t.value in declared_funs
+        assert t.typ == TokenType.IDENTIFIER
         expect_token(TokenType.OPEN_PAREN)
-        func = declared_funs[t.value]
-        num_expected_args = len(func.args)
+        if t.value in declared_funs:
+            func = declared_funs[t.value]
+            num_expected_args = len(func.args)
+        elif t.value == defining_function_name:
+            num_expected_args = len(defining_function_args)
         arg_exp = []
         while True:
             tok = tokens[index]
@@ -603,6 +609,8 @@ def parse_tokens(tokens: List[Token]):
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
                 elif defining_function and t.value in defining_function_args:
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
+                elif defining_function and t.value == defining_function_name:
+                    return parse_funcall(t)
                 elif t.value in declared_funs:
                     return parse_funcall(t)
                 elif t.value in global_vars:
