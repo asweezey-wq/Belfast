@@ -25,6 +25,7 @@ class Keyword(Enum):
     BREAK = auto()
     CONTINUE = auto()
     RETURN = auto()
+    INLINE = auto()
 
     STRUCT = auto()
     SIZEOF = auto()
@@ -94,7 +95,8 @@ KEYWORD_NAMES = {
     'fun': Keyword.FUN,
     'break': Keyword.BREAK,
     'continue': Keyword.CONTINUE,
-    'struct': Keyword.STRUCT
+    'struct': Keyword.STRUCT,
+    'inline': Keyword.INLINE,
 }
 
 BUILTINS_NAMES = {
@@ -252,6 +254,7 @@ class ASTNode_Load(ASTNode_Base):
 @dataclass
 class ASTNode_Fundef(ASTNode_Base):
     fun_name: str
+    fun_flags: int
     args: List[str]
     body: List[ASTNode_Base]
 
@@ -402,6 +405,9 @@ TF_REMOVE = 4 # Should remove
 TF_SYSCALL = 8 # to specify a syscall arg
 TF_DONT_FORWARD = 16
 
+SF_INLINE = 1
+
+triple_uid = itertools.count().__next__
 @dataclass(eq=False)
 class Triple:
     typ:TripleType

@@ -683,7 +683,7 @@ def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
                     trips.remove(t)
                     REMOVAL_HINTS[t] = "Assignment without use"
                     did_change = True
-            if OPTIMIZATION_FLAGS['common-exp']:
+            if not did_change and OPTIMIZATION_FLAGS['common-exp']:
                 # TODO: create a table for faster common exp lookups
                 lv = t.l_val
                 rv = t.r_val

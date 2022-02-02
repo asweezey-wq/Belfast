@@ -162,6 +162,7 @@ def parse_tokens(tokens: List[Token]):
     declared_funs: Dict[str, ASTNode_Base] = {}
     defining_function = False
     defining_function_name = ''
+    defining_function_flags = 0
     defining_fun_body = []
     defining_function_args = []
 
@@ -493,7 +494,7 @@ def parse_tokens(tokens: List[Token]):
         return ASTNode_Number(ASTType.NUMBER, tok, sz)
 
     def parse_function_def():
-        nonlocal index, defining_function, defining_fun_body, defining_function_args, defining_function_name
+        nonlocal index, defining_function, defining_fun_body, defining_function_args, defining_function_name, defining_function_flags
         tok = expect_keyword(Keyword.FUN)
         # if len(declared_vars):
         #     compiler_error(tok.loc, "Variables declared outside of function")
@@ -502,6 +503,16 @@ def parse_tokens(tokens: List[Token]):
 
         if defining_function:
             compiler_error(tok.loc, "Nested functions are not supported")
+
+        fun_flags = 0
+
+        while tokens[index].typ == TokenType.KEYWORD:
+            if tokens[index].value == Keyword.INLINE and not (fun_flags & SF_INLINE):
+                fun_flags |= SF_INLINE
+                expect_keyword(Keyword.INLINE)
+            else:
+                compiler_error(tokens[index].loc, f"Unknown function modifier {tokens[index].value.name}")
+
         ident_tok = expect_token(TokenType.IDENTIFIER)
 
         if ident_tok.value in declared_funs:
@@ -520,6 +531,7 @@ def parse_tokens(tokens: List[Token]):
         defining_function_name = ident_tok.value
         defining_fun_body = []
         defining_function_args = args
+        defining_function_flags = fun_flags
 
         while True:
             tok = tokens[index]
@@ -535,11 +547,12 @@ def parse_tokens(tokens: List[Token]):
         expect_keyword(Keyword.END)
 
         defining_function = False
-        fundef = ASTNode_Fundef(ASTType.FUN_DEF, ident_tok, ident_tok.value, args, defining_fun_body)
+        fundef = ASTNode_Fundef(ASTType.FUN_DEF, ident_tok, ident_tok.value, fun_flags, args, defining_fun_body)
         declared_funs[ident_tok.value] = fundef
         defining_fun_body = []
         defining_function_args = []
         defining_function_name = ''
+        defining_function_flags = 0
 
         declared_vars.clear()
 
@@ -553,6 +566,8 @@ def parse_tokens(tokens: List[Token]):
             func = declared_funs[t.value]
             num_expected_args = len(func.args)
         elif t.value == defining_function_name:
+            if defining_function_flags & SF_INLINE:
+                compiler_error(t.loc, "Recursive calls are not supported in inline functions")
             num_expected_args = len(defining_function_args)
         arg_exp = []
         while True:

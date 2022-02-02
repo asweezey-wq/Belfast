@@ -12,6 +12,7 @@ class TripleContext:
         self.declared_vars: Set[str] = set()
         self.globals : Set[str] = set()
         self.functions = {}
+        self.func_flags = {}
         self.function_ctx = {}
         self.buffers: Dict[str, int] = {}
         self.local_buffers: List[Buffer] = []
@@ -35,8 +36,9 @@ class TripleContext:
     def declare_variable(self, name:str):
         self.declared_vars.add(name)
 
-    def declare_function(self, name:str, trips: List[Triple], trip_ctx: 'TripleContext'):
+    def declare_function(self, name:str, flags: int, trips: List[Triple], trip_ctx: 'TripleContext'):
         self.functions[name] = trips
+        self.func_flags[name] = flags
         self.function_ctx[name] = trip_ctx
 
     def create_subctx(self):
@@ -346,6 +348,8 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             scoped_ctx.string_offs = len(ctx.strings) + ctx.string_offs
             scoped_ctx.declared_vars.update(args)
             scoped_ctx.globals = ctx.declared_vars
+            scoped_ctx.func_flags = ctx.func_flags
+            scoped_ctx.functions = ctx.functions
             scoped_ctx.ctx_name = fun_name
             end_label = Triple(TripleType.LABEL, None, None, None)
             scoped_ctx.function_return_label = end_label
@@ -360,7 +364,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             fun_triples.append(Triple(TripleType.RETURN, None, create_var_ref_value(scoped_ctx.function_return_var), None))
             ctx.buffer_offs += len(scoped_ctx.buffers)
             ctx.string_offs += len(scoped_ctx.strings)
-            ctx.declare_function(fun_name, fun_triples, scoped_ctx)
+            ctx.declare_function(fun_name, ast.fun_flags, fun_triples, scoped_ctx)
         case ASTType.FUN_CALL:
             fun_name = ast.fun_name
             arg_vals = []
