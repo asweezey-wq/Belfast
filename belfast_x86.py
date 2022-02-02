@@ -773,7 +773,8 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                     code_stats.cond_jmp_ops += 1
                     if lv.typ == TripleValueType.TRIPLE_REF and (lv.value.flags & TF_BOOL_FORWARDED) > 0:
                         assert lv.value.op in CMP_OP_INSTR_MAP, "Expected Bool forwarded triple to be a CMP op"
-                        write_asm(f"j{CMP_OP_INSTR_MAP[INVERT_CMP_OP[lv.value.op]]} {triple_value_str(rv, trip_ctx)}")
+                        op = INVERT_CMP_OP[lv.value.op] if t.op == Operator.NE else lv.value.op
+                        write_asm(f"j{CMP_OP_INSTR_MAP[op]} {triple_value_str(rv, trip_ctx)}")
                     else:
                         assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
                         code_stats.basic_ops += 1

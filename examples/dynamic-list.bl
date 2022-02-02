@@ -76,10 +76,10 @@ fun main do
     num_list_init(num_list)
     const N = 24
     var i = 0
-    while i < N do
+    do
         num_list_append(num_list, i * i)
         i = i + 1
-    end
+    while i < N end
     i = 0
     num_list_remove(num_list, 0)
     while i < loadf(list.size, num_list) do
