@@ -198,6 +198,17 @@ fun atoi a do
     return i
 end
 
+fun itoa i buf buflen do
+    var j = 0
+    do
+        store8(buf + j, 0x30 + i % 10)
+        i = i / 10
+        j = j + 1
+        if j >= buflen then break; end
+    while i end
+    return j
+end
+
 fun read_until fd delim buf buflen do
     var b_read = read(fd, buf, buflen)
     var i = 0

@@ -207,12 +207,7 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
     values_coalesced = {}
 
     return_trips = [t for t in trips if t.typ == TripleType.RETURN]
-    return_var = None
-    if len(return_trips) == 1:
-        if return_trips[0].l_val.typ == TripleValueType.VAR_REF:
-            return_var = return_trips[0].l_val.value
-    elif len(return_trips) > 1:
-        assert False
+    return_var = trip_ctx.function_return_var
     reg_order = DATA_REGISTERS if trip_ctx.ctx_name == 'main' else CALLER_SAVED_REG + CALLEE_SAVED_REG
 
     for v in interf_graph:
@@ -220,7 +215,7 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
             case TripleValueType.REGISTER:
                 precolors[v] = reg_order.index(v.value)
             case TripleValueType.VAR_REF:
-                if return_var and v.value == return_trips[0].l_val.value:
+                if return_var and v.value == return_var:
                     precolors[v] = reg_order.index(RAX_INDEX)
             case TripleValueType.TRIPLE_REF:
                 t = v.value
