@@ -1,4 +1,4 @@
-include "stdlib.bl"
+include stdlib
 
 fun main do
     var a = 42

@@ -14,7 +14,7 @@ def run_test(testfile):
             expected_out = f.read()
     except FileNotFoundError:
         pass
-    c = CompilerSettings()
+    c = CompilerSettings(['.', 'std'])
     c.tripstr_filename = f'./tests/tripstr/{testfile.split("/")[-1][:-3]}.tripstr'
     c.output_filename = f'./tests/asm/{testfile.split("/")[-1][:-3]}.asm'
     belfast.set_compiler_settings(c)

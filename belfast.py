@@ -692,8 +692,20 @@ def parse_tokens(tokens: List[Token]):
 
     def parse_include():
         tok = expect_keyword(Keyword.INCLUDE)
-        file_tok = expect_token(TokenType.STRING)
-        inc_a, inc_vars, inc_funs, inc_consts, inc_structs = file_to_ast(file_tok.value)
+        file_tok = expect_token(TokenType.IDENTIFIER)
+        filename = file_tok.value + '.bl'
+        f = None
+        for i_dir in belfast_data.COMPILER_SETTINGS.include_dirs:
+            f = os.path.join(i_dir, filename)
+            if os.path.exists(f):
+                if not os.path.isfile(f):
+                    compiler_error(file_tok.loc, f"{f} must be a file")
+                break
+        else:
+            compiler_error(file_tok.loc, f"Could not find any matching Belfast file \"{filename}\". Check that you included the directory containing that file.")
+        if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+            print(f"[INFO] Including {f}")
+        inc_a, inc_vars, inc_funs, inc_consts, inc_structs = file_to_ast(f)
         ast.extend(inc_a)
         global_vars.update(inc_vars)
         declared_funs.update(inc_funs)
@@ -724,12 +736,8 @@ def parse_tokens(tokens: List[Token]):
                         return_ast = parse_store()
                     case Keyword.LOAD | Keyword.SLOAD | Keyword.LOADF | Keyword.SLOADF | Keyword.LOAD8 | Keyword.LOAD64 | Keyword.SLOAD8 | Keyword.LOAD16 | Keyword.SLOAD16 | Keyword.LOAD32 | Keyword.SLOAD32:
                         return_ast = parse_load()
-                    case Keyword.INCLUDE:
-                        parse_include()
                     case Keyword.CONST:
                         parse_const()
-                    case Keyword.FUN:
-                        return_ast = parse_function_def()
                     case Keyword.BREAK:
                         return_ast = ASTNode_Base(ASTType.BREAK, expect_keyword(Keyword.BREAK))
                     case Keyword.CONTINUE:
@@ -947,18 +955,20 @@ if __name__ == '__main__':
     argp.add_argument('file', help='The file input to the compiler')
     argp.add_argument('-o', '--output', dest='output', help='The output assembly file', default='prog.asm')
     argp.add_argument('-c', '--do-comments', dest='do_comments', action='store_true', help='Turn off the comments generated in assembly')
-    argp.add_argument('-ir', '--ir-only', dest='ir_only', action='store_true', help='Only generate the IR code, not the assembly')
+    argp.add_argument('--ir', dest='ir', action='store', help='Generate the IR files')
+    argp.add_argument('--no-asm', dest='no_asm', action='store_true', help='Don\'t generate the assembly')
     argp.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='Enable verbose mode')
     argp.add_argument('-nc', '--no-const', dest='no_const', action='store_true', help='Disable constant propagation')
     argp.add_argument('-reg', '--registers', dest='registers', action='store', help='Set the limit on the number of registers', default='0')
     argp.add_argument('-r', '--run', dest='run', action='store_true', help='Compile and run the program')
     argp.add_argument('-s', '--stat', dest='stat', help='Stat the code generation')
-    argp.add_argument('-d', '--diff', dest='diff', action='store_true', help='Store the optimization diff files')
+    argp.add_argument('-d', '--diff', dest='diff', action='store', help='Store the optimization diff files in the provided directory')
+    argp.add_argument('-I', '--include', dest='include', action='append', help='Tells the compiler where to search for included files')
     args = argp.parse_args()
 
     filename = args.file
 
-    belfast_data.COMPILER_SETTINGS = CompilerSettings()
+    belfast_data.COMPILER_SETTINGS = CompilerSettings(['.'])
 
     if args.do_comments:
         belfast_data.COMPILER_SETTINGS.asm_comments = True
@@ -966,14 +976,35 @@ if __name__ == '__main__':
     if args.verbose:
         belfast_data.COMPILER_SETTINGS.verbose = 1
 
-    if args.ir_only:
+    if args.ir:
+        belfast_data.COMPILER_SETTINGS.generate_tripstr = True
+        if os.path.isdir(args.ir):
+            print("ERROR: The IR output must be a valid file", file=sys.stderr)
+            sys.exit(1)
+        belfast_data.COMPILER_SETTINGS.tripstr_filename = args.ir
+
+    if args.no_asm:
         belfast_data.COMPILER_SETTINGS.generate_asm = False
 
     if args.no_const:
         belfast_data.COMPILER_SETTINGS.const_propagation = False
     
     if args.diff:
+        if not belfast_data.COMPILER_SETTINGS.generate_tripstr:
+            print("ERROR: You must also enable IR generation in order to generate IR diffs", file=sys.stderr)
+            sys.exit(1)
         belfast_data.COMPILER_SETTINGS.generate_diff = True
+        if not os.path.exists(args.diff) or not os.path.isdir(args.diff):
+            print("ERROR: You must provide a valid directory to put the IR diff files in")
+            sys.exit(1)
+        belfast_data.COMPILER_SETTINGS.tripopt_dir = args.diff
+
+    if args.include:
+        for i in args.include:
+            if not os.path.exists(i) or not os.path.isdir(i):
+                print(f"ERROR: {i} is not a valid directory", file=sys.stderr)
+                sys.exit(1)
+            belfast_data.COMPILER_SETTINGS.include_dirs.append(i)
 
     try:
         belfast_data.COMPILER_SETTINGS.register_limit = int(args.registers)

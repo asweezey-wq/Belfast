@@ -13,3 +13,5 @@ test
 prog
 prog.bl
 belfastsyntaxhighlight/
+tmp/
+bin/

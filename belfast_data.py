@@ -564,9 +564,11 @@ MEM_WORD_SIZE_MAP = {
 
 @dataclass
 class CompilerSettings:
+    include_dirs: List[str]
     output_filename: str = ''
-    generate_tripstr: bool = True
+    generate_tripstr: bool = False
     tripstr_filename: str = 'prog.tripstr'
+    tripopt_dir: str = 'tripstr'
     generate_diff: bool = False
     generate_asm: bool = True
     verbose: int = 0

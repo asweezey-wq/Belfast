@@ -2,6 +2,7 @@ import belfast_data
 from belfast_triples import *
 from typing import *
 from math import log2
+import os
 
 OPTIMIZATION_FLAGS_DEFAULTS = {
     'const-eval': True,
@@ -928,8 +929,10 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
 
     prev_trips: List[Triple] = None
 
+    tripopt_file = os.path.join(belfast_data.COMPILER_SETTINGS.tripopt_dir, f"{trip_ctx.ctx_name}_tripopt.tripstr")
+
     if belfast_data.COMPILER_SETTINGS.generate_tripstr and belfast_data.COMPILER_SETTINGS.generate_diff:
-        with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'w') as f:
+        with open(tripopt_file, 'w') as f:
             for t in trips:
                 f.write(f"{print_triple(t)}\n")
             f.write("\n")
@@ -945,8 +948,8 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
         if belfast_data.COMPILER_SETTINGS.generate_diff:
             if belfast_data.COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
                 d = get_triple_delta2(prev_trips, trips)
-                output_triple_delta_to_file2(d, f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr")
-                with open(f"./tripstr/{trip_ctx.ctx_name}_tripopt.tripstr", 'a') as f:
+                output_triple_delta_to_file2(d, tripopt_file)
+                with open(tripopt_file, 'a') as f:
                     for t in trips:
                         f.write(f"{print_triple(t)}\n")
                     f.write("\n")

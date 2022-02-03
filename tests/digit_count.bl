@@ -1,5 +1,5 @@
-include "stdlib.bl"
-include "stdmem.bl"
+include stdlib
+include stdmem
 
 fun solve n do
     var half = n / 2
