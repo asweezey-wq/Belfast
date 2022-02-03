@@ -150,6 +150,16 @@ The body of the loop will continue to be executed as long as the condition evalu
 
 The `break` statement will immediately exit the loop, and the `continue` statement will immediately skip to the next loop iteration
 
+**Do While Loops**
+
+Do while loops are the same as while loops, but flipped
+```
+do
+  ...
+while ... end
+```
+The difference is that do-while loops will execute their body once before checking the condition and looping.
+
 ### Functions
 ***
 
@@ -180,7 +190,15 @@ foo(2, 3)
 ```
 This passes 2 as the `x` argument and 3 as the `y` argument, and evaluates to the return value of `foo`
 
-There is currently no support for recursion yet-- this is a work in progress.
+**Inlining**
+
+Functions can be defined as `inline` like so
+```
+fun inline foo do
+  ...
+end
+```
+This tells the compiler to simply copy the code for each function call instead of jumping to that part of the code. This can cause significant speed improvements with small functions, but inlining large functions is generally a bad idea.
 
 ### Memory Control
 ***
@@ -366,6 +384,21 @@ This will prepend the current file with any definitions from `stdlib.bl`. `inclu
 - `const` declarations
 - includes from the included file (will add flags to fix this)
 - `struct` declarations
+- `global` declarations
+
+### Globals
+***
+
+Globals can be defined in the same way as regular variables, however they cannot be assigned in the global scope. They default to zero.
+```
+var g
+fun main do
+  g = 23
+  // use g
+  ...
+end
+```
+These globals can be used across Belfast files, and provide another way for data to be allocated outside of the stack.
 
 ### Syscalls
 ***
@@ -394,6 +427,7 @@ ld -lSystem prog.o -o prog
 - `-nc` - Prevents the compiler from evaluating constant expressions at compile time (for debugging)
 - `-s` - Provides code metrics for efficiency of generated x86 (for debugging)
 - `-ir` - Stops the compiler from generating the assembly, it will only output the IR files
+- `-d` - Generate .tripopt files, which show the IR differences throughout the optimization phase
 
 **Generated Files**
 
@@ -401,7 +435,5 @@ By default, the compiler will output to `prog.asm` if it is not given an output 
 
 The compiler will also generate `prog.tripstr`, which shows the IR of the program, and `prog.tripstr.x86`, which shows the IR of the program once it has been converted to x86 and registers have been allocated, etc.
 
-The compiler will also generate `..._tripopt.tripstr` files for each function (e.g. `main` would be `main_tripopt.tripstr`) in the `./tripstr/` directory. These show the IR of the given function after each optimization pass, with a diff to show what was added/removed and why
-
-TODO: Added more CLI arguments to control generated files
+If `-d` is used, the compiler will generate `..._tripopt.tripstr` files for each function (e.g. `main` would be `main_tripopt.tripstr`) in the `./tripstr/` directory. These show the IR of the given function after each optimization pass, with a diff to show what was added/removed and why
 
