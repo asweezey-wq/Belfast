@@ -17,6 +17,7 @@ def run_test(testfile):
     c = CompilerSettings(['.', 'std'])
     c.tripstr_filename = f'./tests/tripstr/{testfile.split("/")[-1][:-3]}.tripstr'
     c.output_filename = f'./tests/asm/{testfile.split("/")[-1][:-3]}.asm'
+    c.verbose = 0
     belfast.set_compiler_settings(c)
     belfast_triples_opt.set_opt_flags(OPTIMIZATION_FLAGS_DEFAULTS)
     print(f"[INFO] Compiling {testfile}")

@@ -573,7 +573,7 @@ def parse_tokens(tokens: List[Token]):
         
         expect_token(TokenType.CLOSE_PAREN)
         if len(arg_exp) != num_expected_args:
-            compiler_error(t.loc, f"Function {t.value} expected {num_expected_args}, got {len(arg_exp)}")
+            compiler_error(t.loc, f"Function {t.value} expected {num_expected_args} arguments, got {len(arg_exp)} arguments")
         
         return ASTNode_Funcall(ASTType.FUN_CALL, t, t.value, arg_exp)
 
@@ -869,10 +869,18 @@ def file_to_ast(filename: str):
     toks = tokenize_string(os.path.abspath(filename), code_str)
     return parse_tokens(toks)
 
+import time
+
 def compile(filename: str, do_stat=None):
+    s = time.time()
     parsectx: ParseContext = file_to_ast(filename)
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[TIME] Parsing took {time.time() - s:.4f} s")
+    s = time.time()
     
     trip_ctx = triples_parse_program(parsectx)
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[TIME] Triples Conversion took {time.time() - s:.4f} s")
 
     asm = get_asm_header()
 
@@ -881,22 +889,39 @@ def compile(filename: str, do_stat=None):
 
     stats = {}
 
+    s = time.time()
+
+    opt_time = 0
+    x86_opt_time = 0
+    asm_time = 0
+
     for f_name in parsectx.fun_signatures:
         f_ctx = trip_ctx.get_function(f_name)
         prog_tripstr += f"FUNCTION {f_name}\n"
+        s = time.time()
         f_trips = optimize_triples(f_ctx)
+        opt_time += time.time() - s
         index_triples(f_trips)
         for t in f_trips:
             prog_tripstr += f"{print_triple(t)}\n"
         if belfast_data.COMPILER_SETTINGS.generate_asm:
+            s = time.time()
             f_trips, ctx_x86 = optimize_x86(f_trips, f_ctx)
+            x86_opt_time += time.time() - s
             x86_tripstr += f"FUNCTION {f_name}\n"
             x86_tripstr += output_x86_trips_to_str(f_trips, ctx_x86)
             x86_tripstr += "\n"
             stat = CodeScoreStat()
+            s = time.time()
             asm += convert_function_to_asm(f_name, f_trips, ctx_x86, stat)
+            asm_time += time.time() - s
             stats[f_name] = stat
         prog_tripstr += "\n"
+
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[TIME] IR optimization took {opt_time:.4f} s")
+        print(f"[TIME] x86 optimizatioon took {x86_opt_time:.4f} s")
+        print(f"[TIME] Assembly generation took {asm_time:.4f} s")
 
     if belfast_data.COMPILER_SETTINGS.verbose >= 1:
         print("[INFO] Compiled successfully")
