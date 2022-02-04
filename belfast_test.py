@@ -16,14 +16,14 @@ def run_test(testfile):
         pass
     c = CompilerSettings(['.', 'std'])
     c.tripstr_filename = f'./tests/tripstr/{testfile.split("/")[-1][:-3]}.tripstr'
-    c.output_filename = f'./tests/asm/{testfile.split("/")[-1][:-3]}.asm'
+    c.output_filename = f'./tests/asm/{testfile.split("/")[-1][:-3]}.o'
     c.verbose = 0
     belfast.set_compiler_settings(c)
     belfast_triples_opt.set_opt_flags(OPTIMIZATION_FLAGS_DEFAULTS)
     print(f"[INFO] Compiling {testfile}")
-    belfast.compile(testfile)
+    belfast.compile_bl(testfile)
     # print(f"[INFO] Building and linking asm")
-    belfast.build_executable()
+    belfast.link_object(c.output_filename, 'a.out', ['std'], remove_obj=True)
     # print(f"[CMD] ./a.out")
     com = subprocess.run("./a.out", capture_output=True)
     actual_out = com.stdout.decode('utf-8')

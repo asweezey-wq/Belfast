@@ -862,19 +862,9 @@ def file_to_ast(filename: str):
 
 import time
 
-def compile(filename: str, do_stat=None):
-    s = time.time()
-    parsectx: ParseContext = file_to_ast(filename)
-    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-        print(f"[TIME] Parsing took {time.time() - s:.4f} s")
-    s = time.time()
-    
-    trip_ctx = triples_parse_program(parsectx)
-    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-        print(f"[TIME] Triples Conversion took {time.time() - s:.4f} s")
-
+def compile_trip_ctx(trip_ctx: TripleContext, do_stat=None):
     asm = get_asm_header()
-
+    parsectx = trip_ctx.parsectx
     x86_tripstr = ""
     prog_tripstr = ""
 
@@ -886,6 +876,8 @@ def compile(filename: str, do_stat=None):
     x86_opt_time = 0
     asm_time = 0
 
+    ref_gen = belfast_data.COMPILER_SETTINGS.generate_ref != ''
+
     for f_name in parsectx.fun_signatures:
         f_ctx = trip_ctx.get_function(f_name)
         prog_tripstr += f"FUNCTION {f_name}\n"
@@ -895,8 +887,8 @@ def compile(filename: str, do_stat=None):
         index_triples(f_trips)
         for t in f_trips:
             prog_tripstr += f"{print_triple(t)}\n"
-        if belfast_data.COMPILER_SETTINGS.generate_asm:
-            s = time.time()
+        s = time.time()
+        if not ref_gen:
             f_trips, ctx_x86 = optimize_x86(f_trips, f_ctx)
             x86_opt_time += time.time() - s
             x86_tripstr += f"FUNCTION {f_name}\n"
@@ -923,15 +915,13 @@ def compile(filename: str, do_stat=None):
         with open(belfast_data.COMPILER_SETTINGS.tripstr_filename + '.x86', 'w') as f:
             f.write(x86_tripstr)
 
-    if belfast_data.COMPILER_SETTINGS.generate_ref != '':
+    if ref_gen:
         serialize_program(belfast_data.COMPILER_SETTINGS.generate_ref, trip_ctx)
         if belfast_data.COMPILER_SETTINGS.verbose >= 1:
             print(f"[INFO] Generated reference file {belfast_data.COMPILER_SETTINGS.generate_ref}")
 
-    if belfast_data.COMPILER_SETTINGS.generate_asm:
-        asm += get_asm_footer(trip_ctx)
-        with open(belfast_data.COMPILER_SETTINGS.output_filename, 'w') as f_asm:
-            f_asm.write(asm)
+    asm += get_asm_footer(trip_ctx)
+    asm_finished(asm)
 
     if do_stat:
         if do_stat in ['1', '2']:
@@ -944,6 +934,19 @@ def compile(filename: str, do_stat=None):
             print("ERROR: stat argument should be '1' or '2'", file=sys.stderr)
             sys.exit(1)
 
+def compile_bl(filename: str, do_stat=None):
+    s = time.time()
+    parsectx: ParseContext = file_to_ast(filename)
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[TIME] Parsing took {time.time() - s:.4f} s")
+    s = time.time()
+    
+    trip_ctx = triples_parse_program(parsectx)
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[TIME] Triples Conversion took {time.time() - s:.4f} s")
+
+    compile_trip_ctx(trip_ctx, do_stat)
+
 def compile_blc(filename: str):
     parsectx : ParseContext = deserialize_program(filename)
 
@@ -953,56 +956,54 @@ def compile_blc(filename: str):
     trip_ctx.strings = parsectx.strings
     trip_ctx.parsectx = parsectx
 
-    asm = get_asm_header()
+    compile_trip_ctx(trip_ctx)
 
-    x86_tripstr = ""
-    prog_tripstr = ""
-
-    for f_name, f_ctx in trip_ctx.functions.items():
-        f_trips = f_ctx.triples
-        prog_tripstr += f"FUNCTION {f_name}\n"
-        index_triples(f_trips)
-        for t in f_trips:
-            prog_tripstr += f"{print_triple(t)}\n"
-        if belfast_data.COMPILER_SETTINGS.generate_asm:
-            f_trips, ctx_x86 = optimize_x86(f_trips, f_ctx)
-            x86_tripstr += f"FUNCTION {f_name}\n"
-            x86_tripstr += output_x86_trips_to_str(f_trips, ctx_x86)
-            x86_tripstr += "\n"
-            stat = CodeScoreStat()
-            asm += convert_function_to_asm(f_name, f_trips, ctx_x86, stat)
-        prog_tripstr += "\n"
-
-    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-        print("[INFO] Compiled successfully")
-
-    if belfast_data.COMPILER_SETTINGS.generate_tripstr:
-        with open(belfast_data.COMPILER_SETTINGS.tripstr_filename, 'w') as f:
-            f.write(prog_tripstr)
-        with open(belfast_data.COMPILER_SETTINGS.tripstr_filename + '.x86', 'w') as f:
-            f.write(x86_tripstr)
-
+def asm_finished(asm):
     if belfast_data.COMPILER_SETTINGS.generate_asm:
-        asm += get_asm_footer(trip_ctx)
         with open(belfast_data.COMPILER_SETTINGS.output_filename, 'w') as f_asm:
             f_asm.write(asm)
+        if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+            print(f"[INFO] Wrote assembly to '{belfast_data.COMPILER_SETTINGS.output_filename}'")
+    elif belfast_data.COMPILER_SETTINGS.generate_object:
+        asm_filename = belfast_data.COMPILER_SETTINGS.output_filename + '.asm'
+        with open(asm_filename, 'w') as f:
+            f.write(asm)
+        status = build_object(asm_filename, belfast_data.COMPILER_SETTINGS.output_filename)
+        if status == 0:
+            if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+                print(f"[INFO] Successfully assembled '{belfast_data.COMPILER_SETTINGS.output_filename}'")
+        else:
+            print(f"[ERROR] Error assembling '{belfast_data.COMPILER_SETTINGS.output_filename}'", file=sys.stderr)
+            sys.exit(1)
 
-def build_executable():
-    if not belfast_data.COMPILER_SETTINGS.generate_asm:
-        print("ERROR: You must enable x86 assembly generation to run the program", file=sys.stderr)
+def build_object(asm_filename: str, output_filename: str, remove_asm: bool = True):
+    cmd = f"nasm -fmacho64 {asm_filename} -o {output_filename}"
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[CMD] Executing '{cmd}'")
+    if os.system(cmd) != 0:
+        return -1
+    if remove_asm:
+        os.remove(asm_filename)
+    return 0
+
+def link_object(obj_filename: str, output_filename: str, include_dirs: List[str], remove_obj=False):
+    cmd = f"ld -lSystem -L$(xcode-select -p)/SDKs/MacOSX.sdk/usr/lib {obj_filename} {' '.join(['{}/*.o'.format(i) for i in include_dirs])} -o {output_filename}"
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[CMD] Executing '{cmd}'")
+    status = os.system(cmd)
+    if status != 0:
+        print("[ERROR] Linking failed", file=sys.stderr)
         sys.exit(1)
-    
-    cmd = f"nasm -fmacho64 {belfast_data.COMPILER_SETTINGS.output_filename} -o a.out.o"
+    elif belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[INFO] Successfully linked '{obj_filename}'")
+    if remove_obj:
+        os.remove(obj_filename)
+    return 0
+
+def run_file(filename: str):
+    cmd = f"./{filename}"
     if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-        print(f"[INFO] Executing '{cmd}'")
-    os.system(cmd)
-    cmd = f"ld -lSystem -L$(xcode-select -p)/SDKs/MacOSX.sdk/usr/lib a.out.o std/*.o -o a.out"
-    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-        print(f"[INFO] Executing '{cmd}'")
-    os.system(cmd)
-    cmd = f"rm a.out.o 2>/dev/null"
-    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-        print(f"[INFO] Executing '{cmd}'")
+        print(f"[CMD] Executing '{cmd}'")
     os.system(cmd)
 
 import argparse
@@ -1010,11 +1011,10 @@ import argparse
 if __name__ == '__main__':
     argp = argparse.ArgumentParser(description='The Belfast Compiler')
     argp.add_argument('file', help='The file input to the compiler')
-    argp.add_argument('-o', '--output', dest='output', help='The output assembly file', default='prog.asm')
+    argp.add_argument('-o', '--output', dest='output', help='The output file', default='a.out')
     argp.add_argument('--comment', dest='do_comments', action='store_true', help='Turn on the comments generated in assembly')
-    argp.add_argument('-c', '--compile-blc', dest="compile_blc", action='store_true', help='Compiled a .blc file')
+    argp.add_argument('--blc', dest="compile_blc", action='store_true', help='Compiled a .blc file')
     argp.add_argument('--ir', dest='ir', action='store', help='Generate the IR files')
-    argp.add_argument('--no-asm', dest='no_asm', action='store_true', help='Don\'t generate the assembly')
     argp.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='Enable verbose mode')
     argp.add_argument('-nc', '--no-const', dest='no_const', action='store_true', help='Disable constant propagation')
     argp.add_argument('-reg', '--registers', dest='registers', action='store', help='Set the limit on the number of registers', default='0')
@@ -1023,6 +1023,8 @@ if __name__ == '__main__':
     argp.add_argument('-d', '--diff', dest='diff', action='store', help='Store the optimization diff files in the provided directory')
     argp.add_argument('-I', '--include', dest='include', action='append', help='Tells the compiler where to search for included files')
     argp.add_argument('-R', '--gen-ref', dest='gen_ref', action='store_true', help='Generates the Belfast Reference files for module inclusion')
+    argp.add_argument('-S', dest='save_asm', action='store_true', help='Saves assembly instead of an object file')
+    argp.add_argument('-L', dest='link', action='store_true', help='Links the generated object file with included files')
     args = argp.parse_args()
 
     filename = args.file
@@ -1030,6 +1032,9 @@ if __name__ == '__main__':
     belfast_data.COMPILER_SETTINGS = CompilerSettings(['.'])
 
     if args.do_comments:
+        if not args.save_asm:
+            print(f"[ERROR] You must specify assembly generation mode to enable comments", file=sys.stderr)
+            sys.exit(1)
         belfast_data.COMPILER_SETTINGS.asm_comments = True
     
     if args.verbose:
@@ -1042,8 +1047,6 @@ if __name__ == '__main__':
             sys.exit(1)
         belfast_data.COMPILER_SETTINGS.tripstr_filename = args.ir
 
-    if args.no_asm:
-        belfast_data.COMPILER_SETTINGS.generate_asm = False
 
     if args.no_const:
         belfast_data.COMPILER_SETTINGS.const_propagation = False
@@ -1059,12 +1062,22 @@ if __name__ == '__main__':
         belfast_data.COMPILER_SETTINGS.tripopt_dir = args.diff
 
     if args.gen_ref:
+        if args.compile_blc:
+            print("[ERROR] Cannot generate a reference file from a .blc file", file=sys.stderr)
+            sys.exit(1)
+        if args.save_asm:
+            print("[ERROR] Conflicting compilation modes: Reference generation and Assembly generation", file=sys.stderr)
+            sys.exit(1)
         if filename.endswith('.bl'):
             ref_filename = filename[:-3] + '.blc'
         else:
             ref_filename = filename + '.blc'
         belfast_data.COMPILER_SETTINGS.generate_ref = ref_filename
-        belfast_data.COMPILER_SETTINGS.generate_asm = False
+        belfast_data.COMPILER_SETTINGS.generate_object = False
+
+    if args.save_asm:
+        belfast_data.COMPILER_SETTINGS.generate_asm = True
+        belfast_data.COMPILER_SETTINGS.generate_object = False
 
     if args.include:
         for i in args.include:
@@ -1072,6 +1085,10 @@ if __name__ == '__main__':
                 print(f"ERROR: {i} is not a valid directory", file=sys.stderr)
                 sys.exit(1)
             belfast_data.COMPILER_SETTINGS.include_dirs.append(i)
+
+    if args.link and not belfast_data.COMPILER_SETTINGS.generate_object:
+        print("[ERROR] Linking can only be performed with object generation", file=sys.stderr)
+        sys.exit(1)
 
     try:
         belfast_data.COMPILER_SETTINGS.register_limit = int(args.registers)
@@ -1090,12 +1107,14 @@ if __name__ == '__main__':
     if args.compile_blc:
         compile_blc(filename)
     else:
-        compile(filename, do_stat=args.stat)
+        compile_bl(filename, do_stat=args.stat)
 
-    if args.run:
-        build_executable()
-        cmd = f"./a.out"
-        if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO] Executing '{cmd}'")
-        os.system(cmd)
-
+    if args.run or args.link:
+        obj_filename = belfast_data.COMPILER_SETTINGS.output_filename
+        if not belfast_data.COMPILER_SETTINGS.generate_object:
+            obj_filename = 'a.out.o'
+            build_object(belfast_data.COMPILER_SETTINGS.output_filename, obj_filename, remove_asm=False)
+        exec_filename = 'a.out' if obj_filename != 'a.out' else 'b.out'
+        link_object(obj_filename, exec_filename, [i for i in belfast_data.COMPILER_SETTINGS.include_dirs if i != '.'], remove_obj=not belfast_data.COMPILER_SETTINGS.generate_object)
+        if args.run:
+            run_file(exec_filename)

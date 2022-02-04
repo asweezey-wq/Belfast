@@ -569,7 +569,8 @@ class CompilerSettings:
     tripopt_dir: str = 'tripstr'
     generate_ref: str = ''
     generate_diff: bool = False
-    generate_asm: bool = True
+    generate_asm: bool = False
+    generate_object: bool = True
     verbose: int = 0
     asm_comments: bool = False
     register_limit: int = 0

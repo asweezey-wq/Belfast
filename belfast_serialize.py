@@ -117,7 +117,8 @@ def serialize_program(filename: str, trip_ctx: TripleContext):
         s_bytes = k.encode('utf-8')
         bytestring += struct.pack('B', len(name_bytes)) + name_bytes + struct.pack('I', len(s_bytes)) + s_bytes
     
-    for f_name, f_ctx in trip_ctx.functions.items():
+    for f_name in trip_ctx.parsectx.fun_signatures:
+        f_ctx = trip_ctx.get_function(f_name)
         bytestring += serialize_function(f_ctx, parsectx.get_fun_signature(f_name))
     with open(filename, 'wb') as f:
         f.write(bytestring)

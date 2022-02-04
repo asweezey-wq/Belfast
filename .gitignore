@@ -3,7 +3,7 @@ tripstr/
 __pycache__
 *.tripstr
 *.tripstr.x86
-a.out
+*.out
 test
 *.s
 *.c
