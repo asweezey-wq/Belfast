@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os, sys
+
 from belfast_data import *
 import belfast_data
 from belfast_triples import *
@@ -7,6 +8,7 @@ from belfast_triples_opt import OPTIMIZATION_FLAGS, optimize_triples
 from belfast_x86 import convert_function_to_asm, get_asm_header, get_asm_footer, optimize_x86, output_x86_trips_to_str
 import re
 from belfast_serialize import deserialize_program, serialize_program
+from dataclasses import asdict
 
 keyword_regex = r'(?:(' + ('|'.join(KEYWORD_NAMES.keys())) + r')(?=\s|$|;))'
 builtins_regex = r'(' + ('|'.join(BUILTINS_NAMES.keys())) + r')'
@@ -154,27 +156,13 @@ def parse_tokens(tokens: List[Token]):
         index += 1
         return tok
 
-    ast = []
+    parsectx = ParseContext()
 
-    declared_vars: Set[str] = set()
-
-    global_vars: Set[str] = set()
-
-    declared_funs: Dict[str, ASTNode_Base] = {}
-    fun_signatures: Dict[str, FunctionSignature] = {}
     defining_fun_signature: Optional[FunctionSignature] = None
     defining_function = False
     defining_fun_body = []
-
-    declared_consts : Dict[str, ASTNode_Base] = {}
-
-    declared_structs : Dict[str, Dict[str, Tuple[int, int]]] = {}
-
-    included_globals = set()
-    included_consts = set()
-    included_structs = set()
-    included_functions = set()
-    included_files = set()
+    
+    local_vars : Set[str] = set()
 
     def evaluate_const(exp: ASTNode_Base):
         match exp.typ:
@@ -207,10 +195,11 @@ def parse_tokens(tokens: List[Token]):
         var_tok = expect_keyword(Keyword.VAR)
         ident_tok = expect_token(TokenType.IDENTIFIER)
         assert isinstance(ident_tok.value, str), "Expected string identifier value"
+        varname = ident_tok.value
         if defining_function:
-            if ident_tok.value in declared_vars:
+            if varname in local_vars:
                 compiler_error(ident_tok.loc, f"Redeclaration of existing variable {ident_tok.value}")
-            declared_vars.add(ident_tok.value)
+            local_vars.add(varname)
             tok = tokens[index]
             if tok.typ == TokenType.ASSIGN:
                 expect_token(TokenType.ASSIGN)
@@ -218,9 +207,9 @@ def parse_tokens(tokens: List[Token]):
                 return ASTNode_VardecAssign(ASTType.VAR_DECL_ASSIGN, var_tok, ident_tok.value, exp)
             return ASTNode_Ident(ASTType.VAR_DECL, var_tok, ident_tok.value)
         else:
-            if ident_tok.value in global_vars:
+            if parsectx.is_global(varname):
                 compiler_error(ident_tok.loc, f"Redeclaration of existing global {ident_tok.value}")
-            global_vars.add(ident_tok.value)
+            parsectx.declare_global(varname)
             return ASTNode_Ident(ASTType.VAR_DECL, var_tok, ident_tok.value)
 
     def parse_print_stmt():
@@ -404,18 +393,18 @@ def parse_tokens(tokens: List[Token]):
     def parse_const():
         expect_keyword(Keyword.CONST)
         ident_tok = expect_token(TokenType.IDENTIFIER)
-        if ident_tok.value in declared_consts:
+        if parsectx.get_const(ident_tok.value) is not None:
             compiler_error(ident_tok.loc, f"Redefinition of existing constant {ident_tok.value}")
         expect_token(TokenType.ASSIGN)
         exp = parse_expression()
         c = evaluate_const(exp)
-        declared_consts[ident_tok.value] = ASTNode_Number(ASTType.NUMBER, ident_tok, c)
+        parsectx.declare_const(ident_tok.value, c)
 
     def parse_struct():
         nonlocal index
         expect_keyword(Keyword.STRUCT)
         ident_tok = expect_token(TokenType.IDENTIFIER)
-        if ident_tok.value in declared_structs:
+        if parsectx.get_struct(ident_tok.value) is not None:
             compiler_error(ident_tok.loc, f"Redefinition of existing struct {ident_tok.value}")
         struct = []
         while True:
@@ -445,13 +434,15 @@ def parse_tokens(tokens: List[Token]):
             struc_dict[fn] = (offs, fs)
             offs += fs
         struc_dict['$end'] = offs
-        declared_structs[ident_tok.value] = struc_dict
+        parsectx.declare_struct(ident_tok.value, struc_dict)
 
     def parse_struct_field():
         struct_name_tok = expect_token(TokenType.IDENTIFIER)
         struct_name = struct_name_tok.value
 
-        if struct_name not in declared_structs:
+        struc = parsectx.get_struct(struct_name)
+
+        if struc is None:
             compiler_error(struct_name_tok.loc, f"Reference to undeclared struct '{struct_name}'")
 
         expect_token(TokenType.PERIOD)
@@ -459,10 +450,10 @@ def parse_tokens(tokens: List[Token]):
         field_name_tok = expect_token(TokenType.IDENTIFIER)
         field_name = field_name_tok.value
 
-        if field_name not in declared_structs[struct_name]:
+        if field_name not in struc:
             compiler_error(field_name_tok.loc, f"Struct '{struct_name}' has no field '{field_name}'")
         
-        return declared_structs[struct_name][field_name]
+        return struc[field_name]
 
     def parse_offset():
         nonlocal index
@@ -483,9 +474,9 @@ def parse_tokens(tokens: List[Token]):
         tok = expect_keyword(Keyword.SIZEOF)
         expect_token(TokenType.OPEN_PAREN)
         ident_tok = expect_token(TokenType.IDENTIFIER)
-        if ident_tok.value not in declared_structs:
+        struct_dict = parsectx.get_struct(ident_tok.value)
+        if struct_dict is None:
             compiler_error(ident_tok.loc, f"Reference to undeclared struct '{ident_tok.value}'")
-        struct_dict = declared_structs[ident_tok.value]
         tok = tokens[index]
         sz = struct_dict['$end']
         if tok.typ == TokenType.PERIOD:
@@ -505,11 +496,10 @@ def parse_tokens(tokens: List[Token]):
         # if len(declared_vars):
         #     compiler_error(tok.loc, "Variables declared outside of function")
         
-        declared_vars.clear()
-
         if defining_function:
             compiler_error(tok.loc, "Nested functions are not supported")
 
+        local_vars.clear()
         fun_flags = 0
 
         while tokens[index].typ == TokenType.KEYWORD:
@@ -521,7 +511,7 @@ def parse_tokens(tokens: List[Token]):
 
         ident_tok = expect_token(TokenType.IDENTIFIER)
 
-        if ident_tok.value in declared_funs:
+        if parsectx.get_fun_signature(ident_tok.value):
             compiler_error(tok.loc, f"Redefinition of existing function {ident_tok.value}")
 
         args = []
@@ -550,14 +540,13 @@ def parse_tokens(tokens: List[Token]):
 
         expect_keyword(Keyword.END)
 
-        defining_function = False
         fundef = ASTNode_Fundef(ASTType.FUN_DEF, ident_tok, ident_tok.value, fun_flags, args, defining_fun_body)
-        declared_funs[ident_tok.value] = fundef
-        fun_signatures[ident_tok.value] = defining_fun_signature
+        parsectx.declare_function(defining_fun_signature)
+        parsectx.define_function_ast(defining_fun_signature.name, fundef)
+        defining_function = False
         defining_fun_body = []
         defining_fun_signature = None
-
-        declared_vars.clear()
+        local_vars.clear()
 
         return fundef
 
@@ -565,8 +554,9 @@ def parse_tokens(tokens: List[Token]):
         nonlocal index
         assert t.typ == TokenType.IDENTIFIER
         expect_token(TokenType.OPEN_PAREN)
-        if t.value in fun_signatures:
-            num_expected_args = fun_signatures[t.value].num_args
+        func_sig = parsectx.get_fun_signature(t.value)
+        if func_sig is not None:
+            num_expected_args = func_sig.num_args
         elif defining_function and t.value == defining_fun_signature.name:
             if defining_fun_signature.flags & SF_INLINE:
                 compiler_error(t.loc, "Recursive calls are not supported in inline functions")
@@ -622,18 +612,18 @@ def parse_tokens(tokens: List[Token]):
                 return ASTNode_Number(ASTType.NUMBER, value=t, num_value=ord(t.value))
             case TokenType.IDENTIFIER:
                 t = expect_token(TokenType.IDENTIFIER)
-                if t.value in declared_vars:
+                if t.value in local_vars:
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
                 elif defining_function and t.value in defining_fun_signature.arg_names:
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
                 elif defining_function and t.value == defining_fun_signature.name:
                     return parse_funcall(t)
-                elif t.value in fun_signatures:
+                elif parsectx.get_fun_signature(t.value) is not None:
                     return parse_funcall(t)
-                elif t.value in global_vars:
+                elif parsectx.is_global(t.value):
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
-                elif t.value in declared_consts:
-                    return declared_consts[t.value]
+                elif parsectx.get_const(t.value) is not None:
+                    return ASTNode_Number(ASTType.NUMBER, t, parsectx.get_const(t.value))
                 else:
                     compiler_error(tok.loc, f"Reference to undefined variable '{t.value}'")
             case _:
@@ -698,6 +688,7 @@ def parse_tokens(tokens: List[Token]):
         filename = file_tok.value + '.bl'
         cfile = file_tok.value + '.blc'
         f = None
+        m = None
         for i_dir in belfast_data.COMPILER_SETTINGS.include_dirs:
             f = os.path.join(i_dir, filename)
             fc = os.path.join(i_dir, cfile)
@@ -705,37 +696,25 @@ def parse_tokens(tokens: List[Token]):
                 if not os.path.isfile(fc):
                     compiler_error(file_tok.loc, f"{fc} must be a file")
                 else:
-                    ctx: TripleContext = deserialize_program(fc)
-                    inc_vars = ctx.declared_vars
-                    inc_sigs = ctx.func_signatures
-                    inc_consts = {k:ASTNode_Number(ASTType.NUMBER, None, v) for k,v in ctx.declared_consts.items()}
-                    inc_structs = []
-                    included_files.add(ctx)
-                    f = fc
+                    ctx: ParseContext = deserialize_program(fc)
+                    m = Module(file_tok.value, fc)
+                    m.parse_ctx = ctx
                     break
             if os.path.exists(f):
                 if not os.path.isfile(f):
                     compiler_error(file_tok.loc, f"{f} must be a file")
                 else:
-                    inc_a, inc_vars, inc_funs, inc_sigs, inc_consts, inc_structs, _ = file_to_ast(f)
-                    included_files.add(f)
+                    ctx = file_to_ast(f)
+                    m = Module(file_tok.value, f)
+                    m.parse_ctx = ctx
                     break
 
         else:
             compiler_error(file_tok.loc, f"Could not find any matching Belfast file \"{filename}\". Check that you included the directory containing that file.")
         if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-            print(f"[INFO] Including {f}")
-        # ast.extend(inc_a)
-        global_vars.update(inc_vars)
-        # declared_funs.update(inc_funs)
-        fun_signatures.update(inc_sigs)
-        declared_consts.update(inc_consts)
-        declared_structs.update(inc_structs)
+            print(f"[INFO] Including {m.name} from {m.src_file}")
 
-        included_functions.update(inc_sigs.values())
-        included_globals.update(inc_vars)
-        included_consts.update(inc_consts.keys())
-        included_structs.update(inc_structs)
+        parsectx.include_module(m)
 
     def parse_statement():
         tok = tokens[index]
@@ -795,7 +774,7 @@ def parse_tokens(tokens: List[Token]):
             case TokenType.KEYWORD:
                 match tokens[index].value:
                     case Keyword.FUN:
-                        ast.append(parse_function_def())
+                        parse_function_def()
                     case Keyword.CONST:
                         parse_const()
                     case Keyword.INCLUDE:
@@ -803,21 +782,13 @@ def parse_tokens(tokens: List[Token]):
                     case Keyword.STRUCT:
                         parse_struct()
                     case Keyword.VAR:
-                        ast.append(parse_var_decl())
+                        parse_var_decl()
                     case _:
                         compiler_error(tokens[index].loc, f"Unexpected keyword {tokens[index].value.name}")
             case _:
                 compiler_error(tokens[index].loc, f"Unexpected token {tokens[index].typ.name}")
-    
-    include_data_dict = {
-        'globals': included_globals,
-        'functions': included_functions,
-        'structs': included_structs,
-        'consts': included_consts,
-        'files': included_files
-    }
 
-    return ast, global_vars, declared_funs, fun_signatures, declared_consts, declared_structs, include_data_dict
+    return parsectx
 
 def print_ast(ast:ASTNode_Base, indent=0):
     indent_str = ' | ' * indent
@@ -899,51 +870,31 @@ def file_to_ast(filename: str):
     return parse_tokens(toks)
 
 def compile(filename: str, do_stat=None):
-    dat = file_to_ast(filename)
-    ast = dat[0]
-    include_data = dat[-1]
-    fun_signatures = dat[3]
+    parsectx: ParseContext = file_to_ast(filename)
     
-    trips, trip_ctx = triples_parse_program(ast, fun_signatures)
-
-    # Mix-in include data
-    trip_ctx.included_files.update(include_data['files'])
-    trip_ctx.included_functions.update(include_data['functions'])
-    trip_ctx.included_globals.update(include_data['globals'])
-
-    trip_ctx.declared_consts = {k:v.num_value for k,v in dat[4].items() if k not in include_data['consts']}
-    trip_ctx.globals = {v for v in trip_ctx.declared_vars if v not in include_data['globals']}
-    # if 'main' not in trip_ctx.functions:
-    #     compiler_error((filename, 1, 1), "No 'main' function found")
+    trip_ctx = triples_parse_program(parsectx)
 
     asm = get_asm_header()
 
     x86_tripstr = ""
     prog_tripstr = ""
 
-    # called_funs = list(get_call_graph(trip_ctx.functions['main'], trip_ctx.functions, visited_funs=('main',)))
-
-    # called_funs.append('main')
-
     stats = {}
 
-    for f_name in trip_ctx.functions.keys():
-        f_trips = trip_ctx.functions[f_name]
+    for f_name in parsectx.fun_signatures:
+        f_ctx = trip_ctx.get_function(f_name)
         prog_tripstr += f"FUNCTION {f_name}\n"
-        index_triples(f_trips)
-        fun_ctx = trip_ctx.function_ctx[f_name]
-        fun_ctx.ctx_name = f_name
-        f_trips = optimize_triples(f_trips, fun_ctx)
+        f_trips = optimize_triples(f_ctx)
         index_triples(f_trips)
         for t in f_trips:
             prog_tripstr += f"{print_triple(t)}\n"
         if belfast_data.COMPILER_SETTINGS.generate_asm:
-            f_trips = optimize_x86(f_trips, fun_ctx)
+            f_trips, ctx_x86 = optimize_x86(f_trips, f_ctx)
             x86_tripstr += f"FUNCTION {f_name}\n"
-            x86_tripstr += output_x86_trips_to_str(f_trips, fun_ctx)
+            x86_tripstr += output_x86_trips_to_str(f_trips, ctx_x86)
             x86_tripstr += "\n"
             stat = CodeScoreStat()
-            asm += convert_function_to_asm(f_name, f_trips, fun_ctx, stat)
+            asm += convert_function_to_asm(f_name, f_trips, ctx_x86, stat)
             stats[f_name] = stat
         prog_tripstr += "\n"
 
@@ -978,27 +929,32 @@ def compile(filename: str, do_stat=None):
             sys.exit(1)
 
 def compile_blc(filename: str):
-    trip_ctx = deserialize_program(filename)
+    parsectx : ParseContext = deserialize_program(filename)
+
+    trip_ctx = TripleContext()
+    trip_ctx.ctx_name = 'global'
+    trip_ctx.functions = parsectx.triple_fun_definitions
+    trip_ctx.strings = parsectx.strings
+    trip_ctx.parsectx = parsectx
+
     asm = get_asm_header()
 
     x86_tripstr = ""
     prog_tripstr = ""
 
-
-    for f_name in trip_ctx.functions.keys():
-        f_trips = trip_ctx.functions[f_name]
-        fun_ctx = trip_ctx.function_ctx[f_name]
+    for f_name, f_ctx in trip_ctx.functions.items():
+        f_trips = f_ctx.triples
         prog_tripstr += f"FUNCTION {f_name}\n"
         index_triples(f_trips)
         for t in f_trips:
             prog_tripstr += f"{print_triple(t)}\n"
         if belfast_data.COMPILER_SETTINGS.generate_asm:
-            f_trips = optimize_x86(f_trips, fun_ctx)
+            f_trips, ctx_x86 = optimize_x86(f_trips, f_ctx)
             x86_tripstr += f"FUNCTION {f_name}\n"
-            x86_tripstr += output_x86_trips_to_str(f_trips, fun_ctx)
+            x86_tripstr += output_x86_trips_to_str(f_trips, ctx_x86)
             x86_tripstr += "\n"
             stat = CodeScoreStat()
-            asm += convert_function_to_asm(f_name, f_trips, fun_ctx, stat)
+            asm += convert_function_to_asm(f_name, f_trips, ctx_x86, stat)
         prog_tripstr += "\n"
 
     if belfast_data.COMPILER_SETTINGS.verbose >= 1:

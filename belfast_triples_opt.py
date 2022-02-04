@@ -405,7 +405,7 @@ class TripleBlock:
 def does_triple_produce_data(triple: Triple):
     return triple.typ in [TripleType.BINARY_OP, TripleType.UNARY_OP, TripleType.SYSCALL, TripleType.LOAD, TripleType.NOP_REF, TripleType.CALL]
 
-def build_control_flow(trips: List[Triple], trip_ctx: TripleContext) -> List[TripleBlock]:
+def build_control_flow(trips: List[Triple]) -> List[TripleBlock]:
     label_references: Dict[Triple, List[Triple]] = {}
     for t in filter(lambda x: x.typ == TripleType.LABEL, trips):
         label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, trips))
@@ -538,8 +538,7 @@ def propagate_block_values(blocks: List[TripleBlock]):
             if in1 != b.in_vals or out1 != b.out_vals:
                 changed = True
 
-def annotate_triples(trips: List[Triple], trip_ctx: TripleContext):
-    triple_references, var_references, var_assignments = get_reference_data(trips, trip_ctx)
+def annotate_triples(trips: List[Triple]):
     for i, t in enumerate(trips):
         if t.typ == TripleType.IF_COND and i > 0:
             cond_val: TripleValue = t.l_val
@@ -551,19 +550,13 @@ def annotate_triples(trips: List[Triple], trip_ctx: TripleContext):
         elif t.typ == TripleType.FUN_ARG_IN or t.typ == TripleType.SYSCALL:
             continue
 
-def get_reference_data(trips: List[Triple], trip_ctx: TripleContext):
+def get_reference_data(trips: List[Triple]):
     triple_references: Dict[Triple, List[Triple]] = {}
     for t in trips:
         if t.typ == TripleType.LABEL:
             continue
         triple_references[t] = list(filter(lambda x: triple_references_triple(x, t), trips))
-    var_references: Dict[str, List[Triple]] = {}
-    for v in trip_ctx.declared_vars:
-        var_references[v] = list(filter(lambda x: triple_references_var(x, v), trips))
-    var_assignments: Dict[str, List[Triple]] = {}
-    for v in trip_ctx.declared_vars:
-        var_assignments[v] = list(filter(lambda x: triple_assigns_var(x, v), trips))
-    return triple_references, var_references, var_assignments
+    return triple_references
 
 from belfast_variable_analysis import identify_loops
 
@@ -599,8 +592,8 @@ def create_dominance_map(blocks: List[TripleBlock]) -> Dict[Triple, Optional[Tri
                 block_queue.append(o_b)
     return dom_map
 
-def block_analysis(trips: List[Triple], trip_ctx: TripleContext):
-    blocks = build_control_flow(trips, trip_ctx)
+def block_analysis(trips: List[Triple]):
+    blocks = build_control_flow(trips)
     if len(blocks) == 0:
         return False
     for b in blocks:
@@ -922,10 +915,9 @@ def get_triple_delta2(old_trips: List[Triple], new_trips: List[Triple]):
     removed_trips = list(trips_by_uid.values())
     return added_trips, changed_trips, removed_trips
 
-def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
+def optimize_triples(trip_ctx: FunctionTripleContext):
     did_modify = True
-
-    orig_len = len(trips)
+    trips = trip_ctx.triples
 
     prev_trips: List[Triple] = None
 
@@ -940,7 +932,7 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
     while did_modify:
         did_modify = False
         index_triples(trips)
-        triple_references, var_references, var_assignments = get_reference_data(trips, trip_ctx)
+        triple_references = get_reference_data(trips)
         label_references: Dict[Triple, List[Triple]] = {}
         for t in filter(lambda x: x.typ == TripleType.LABEL, trips):
             label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, trips))
@@ -955,12 +947,6 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
                     f.write("\n")
 
             prev_trips = deepcopy_trips(trips)
-        # for v in trip_ctx.declared_vars:
-        #     print(f'Var "{v}":')
-        #     print('References:')
-        #     print('\n'.join([f"\t{print_triple(t)}" for t in var_references[v]]))
-        #     print('Assignments:')
-        #     print('\n'.join([f"\t{print_triple(t)}" for t in var_assignments[v]]))
 
         if OPTIMIZATION_FLAGS["const-eval"]:
             did_modify |= const_eval_pass(triple_references)
@@ -1006,8 +992,6 @@ def optimize_triples(trips: List[Triple], trip_ctx: TripleContext):
         did_modify |= remove_unused_labels(trips, label_references)
 
         if not did_modify:
-            did_modify |= block_analysis(trips, trip_ctx)
-
-    # print(f"\nOptimization removed {orig_len - len(trips)} triples")
+            did_modify |= block_analysis(trips)
 
     return trips

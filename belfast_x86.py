@@ -1,10 +1,7 @@
-from asyncore import write
-from re import S
-from tracemalloc import start
 from belfast_triples_opt import *
 from belfast_data import *
 import belfast_data
-from belfast_triples import TripleContext
+from belfast_triples import FunctionTripleContext
 from belfast_variable_analysis import *
 from typing import *
 import sys
@@ -94,8 +91,8 @@ def does_reference_as_memory(t:Triple, ref_t:Triple):
     
     return False
 
-def insert_lea(trips: List[Triple], trip_ctx: TripleContext):
-    triple_references, var_references, var_assignments = get_reference_data(trips, trip_ctx)
+def insert_lea(trips: List[Triple]):
+    triple_references = get_reference_data(trips)
     lea_accum = []
     to_remove = []
     if DO_ADDRESS_COMPUTING:
@@ -132,25 +129,52 @@ def remove_redundant_moves(trips: List[Triple]):
     for t in to_remove:
         trips.remove(t)
 
-def optimize_x86(trips: List[Triple], trip_ctx: TripleContext):
+class Context_x86:
+
+    def __init__(self) -> None:
+        self.ctx_name = ''
+        self.function_return_var = ''
+        self.register_alloc: Dict[TripleValue, int] = {}
+        self.val_liveness : Dict[TripleValue, Set[int]] = {}
+        self.spilled_values : Dict[TripleValue, int] = {}
+        self.memory_spill_register = None
+        self.local_buffers : List[Buffer] = []
+
+    def get_allocated_register(self, tv:TripleValue, tripl_num:int):
+        if tv in self.register_alloc:
+            return self.register_alloc[tv]
+        return None
+
+    def get_all_used_registers(self, index:int):
+        reg = set()
+        for v,s in self.val_liveness.items():
+            if index in s and v in self.register_alloc:
+                reg.add(self.register_alloc[v])
+        return reg
+
+def optimize_x86(trips: List[Triple], trip_ctx: FunctionTripleContext):
     if len(trips) == 0:
         return trips
     trips = insert_x86_regmoves(trips)
 
     remove_redundant_moves(trips)
-    insert_lea(trips, trip_ctx)
+    insert_lea(trips)
 
-    while x86_block_analysis(trips, trip_ctx):
+    ctx = Context_x86()
+    ctx.ctx_name = trip_ctx.ctx_name
+    ctx.local_buffers = trip_ctx.local_buffers
+    ctx.function_return_var = trip_ctx.function_return_var
+    while x86_block_analysis(trips, ctx):
         pass
 
-    i = 8 * len(trip_ctx.spilled_values)
-    for lb in trip_ctx.local_buffers:
+    i = 8 * len(ctx.spilled_values)
+    for lb in ctx.local_buffers:
         lb.rsp_offset = i
         i += lb.size
 
-    x86_trips = convert_x86_triples(trips, trip_ctx)
+    x86_trips = convert_x86_triples(trips, ctx)
 
-    return x86_trips
+    return x86_trips, ctx
 
 def output_x86_trips_to_str(trips: List[Triple], trip_ctx):
     string = ""
@@ -162,10 +186,10 @@ def output_x86_trips_to_str(trips: List[Triple], trip_ctx):
         string += s + '\n'
     return string
 
-def x86_block_analysis(trips: List[Triple], trip_ctx: TripleContext):
+def x86_block_analysis(trips: List[Triple], ctx: Context_x86):
     index_triples(trips)
-    annotate_triples(trips, trip_ctx)
-    x86_assign_registers(trips, trip_ctx)
+    annotate_triples(trips)
+    x86_assign_registers(trips, ctx)
     did_change = False
     trips_to_remove = filter(lambda t: (t.flags & TF_REMOVE) > 0, trips)
     for t in trips_to_remove:
@@ -173,9 +197,9 @@ def x86_block_analysis(trips: List[Triple], trip_ctx: TripleContext):
         did_change = True
     return did_change
 
-def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
-    trip_ctx.register_alloc = {}
-    blocks = build_control_flow(trips, trip_ctx)
+def x86_assign_registers(trips: List[Triple], trip_ctx: Context_x86):
+    trip_ctx.register_alloc.clear()
+    blocks = build_control_flow(trips)
 
     all_vals : Set[TripleValue] = set()
 
@@ -399,7 +423,7 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: TripleContext):
 
     pass
 
-def convert_x86_triples(trips: List[Triple], trip_ctx: TripleContext):
+def convert_x86_triples(trips: List[Triple], trip_ctx: Context_x86):
     # x86_trips = []
     to_remove = []
     for t in trips:
@@ -486,9 +510,9 @@ HEADER = """DEFAULT REL
     segment .text
 """
 
-def triple_value_str(tv: TripleValue, trip_ctx: TripleContext, as_hex=False, size=64):
+def triple_value_str(tv: TripleValue, trip_ctx: Context_x86, as_hex=False, size=64):
     match tv.typ:
-        case TripleValueType.UNKNOWN:
+        case TripleValueType.UNKNOWN | TripleValueType.BUFFER_REF:
             assert False
         case TripleValueType.CONSTANT:
             if as_hex:
@@ -497,8 +521,9 @@ def triple_value_str(tv: TripleValue, trip_ctx: TripleContext, as_hex=False, siz
                 return str(tv.value)
         case TripleValueType.REGISTER:
             return reg_str_for_size(tv.value, size)
-        case TripleValueType.BUFFER_REF | TripleValueType.STRING_REF:
-            return tv.value
+        case TripleValueType.STRING_REF:
+            assert tv.value.label is not None, "String was not assigned a label"
+            return tv.value.label
         case TripleValueType.LOCAL_BUFFER_REF:
             assert tv.value.rsp_offset is not None, "Local buffer was not assigned stack space"
             return f"[rsp+{tv.value.rsp_offset}]"
@@ -538,18 +563,18 @@ BOP_MAP = {
     Operator.BITWISE_XOR: 'xor',
 }
 
-def move_instr(reg:int, tv: TripleValue, trip_ctx: TripleContext):
+def move_instr(reg:int, tv: TripleValue, trip_ctx: Context_x86):
     if tv.typ in [TripleValueType.BUFFER_REF, TripleValueType.STRING_REF, TripleValueType.LOCAL_BUFFER_REF]:
         return f"lea {reg_str_for_size(reg)}, {triple_value_str(tv, trip_ctx)}"
     else:
         return f"mov {reg_str_for_size(reg)}, {triple_value_str(tv, trip_ctx)}"
 
-def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: TripleContext, code_stats: CodeScoreStat):
+def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Context_x86, code_stats: CodeScoreStat):
     asm = ""
-    if any([t.typ == TripleType.PRINT for t in trips]) and not trip_ctx.has_generated_print_code:
-        with open('./print_d.asm', 'r') as f:
-            asm += f.read() + "\n"
-        trip_ctx.has_generated_print_code = True
+    # if any([t.typ == TripleType.PRINT for t in trips]) and not trip_ctx.has_generated_print_code:
+    #     with open('./print_d.asm', 'r') as f:
+    #         asm += f.read() + "\n"
+    #     trip_ctx.has_generated_print_code = True
     asm += f"    global _{fun_name}\n_{fun_name}:\n"
     def write_asm(s):
         nonlocal asm
@@ -863,30 +888,24 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                 case TripleType.SYSCALL:
                     assert t_reg is not None and t_reg == RAX_INDEX, "Expected SYSCALL to be stored in RAX"
                     assert lv is not None and lv.typ == TripleValueType.CONSTANT, "SYSCALL expected a numerical syscall argument"
-                    save_regs = list(filter(lambda x: x in [3, 12], trip_ctx.get_all_used_registers(t.index)))
-                    # for r in save_regs:
-                    #     code_stats.mem_stores += 1
-                    #     write_asm(f"push {reg_str_for_size(r)}")
                     stat_move(lv, code_stats)
                     write_asm(move_instr(t_reg, lv, trip_ctx))
                     code_stats.syscalls += 1
                     write_asm("syscall")
+                case TripleType.PRINT:
+                    assert False
+                    # save_regs = list(filter(lambda x: x in DATA_REGISTERS, trip_ctx.get_all_used_registers(t.index+1)))
+                    # for r in save_regs:
+                    #     code_stats.mem_stores += 1
+                    #     write_asm(f"push {reg_str_for_size(r)}")
+                    # if lv.typ != TripleValueType.REGISTER or lv.value != RDI_INDEX:
+                    #     stat_move(lv, code_stats)
+                    #     write_asm(move_instr(RDI_INDEX, lv, trip_ctx))
+                    # code_stats.fun_calls += 1
+                    # write_asm("call _printd")
                     # for r in reversed(save_regs):
                     #     code_stats.mem_loads += 1
                     #     write_asm(f"pop {reg_str_for_size(r)}")
-                case TripleType.PRINT:
-                    save_regs = list(filter(lambda x: x in DATA_REGISTERS, trip_ctx.get_all_used_registers(t.index+1)))
-                    for r in save_regs:
-                        code_stats.mem_stores += 1
-                        write_asm(f"push {reg_str_for_size(r)}")
-                    if lv.typ != TripleValueType.REGISTER or lv.value != RDI_INDEX:
-                        stat_move(lv, code_stats)
-                        write_asm(move_instr(RDI_INDEX, lv, trip_ctx))
-                    code_stats.fun_calls += 1
-                    write_asm("call _printd")
-                    for r in reversed(save_regs):
-                        code_stats.mem_loads += 1
-                        write_asm(f"pop {reg_str_for_size(r)}")
                 case TripleType.NOP_USE:
                     pass
                 case TripleType.NOP_REF:
@@ -897,7 +916,6 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
                 case TripleType.FUN_ARG_IN:
                     pass
                 case TripleType.CALL:
-                    # TODO: Optimize saves/loads
                     assert lv is not None and lv.typ == TripleValueType.FUN_LABEL  
                     code_stats.fun_calls += 1                  
                     write_asm(f"call {triple_value_str(lv, trip_ctx)}")
@@ -934,29 +952,15 @@ def get_asm_header():
     return HEADER
 
 def get_asm_footer(trip_ctx: TripleContext):
-    did_segment = False
     asm = ""
 
-    all_buffers = dict(trip_ctx.buffers)
-    all_strings = dict(trip_ctx.strings)
-    all_global_vars = set(trip_ctx.declared_vars)
-    for f in trip_ctx.functions:
-        c = trip_ctx.function_ctx[f]
-        all_buffers.update(c.buffers)
-        all_strings.update(c.strings)
+    all_strings = trip_ctx.strings
+    all_global_vars = trip_ctx.parsectx.globals
 
     if len(all_global_vars) > 0:
         asm += "\n\tsegment .bss\n"
-        did_segment = True
         for v in all_global_vars:
             asm += f"_{v}: resb 8\n"
-    
-    # if len(all_buffers) > 0:
-    #     if not did_segment:
-    #         asm += "\tsegment .bss\n"
-    #         did_segment = True
-    #     for b,sz in all_buffers.items():
-    #         asm += f"{b}: resb {sz}\n"
 
     if len(all_strings) > 0:
         asm += "\tsegment .data\n"
@@ -964,12 +968,12 @@ def get_asm_footer(trip_ctx: TripleContext):
             asm += f"{labl}: db `{s.encode('unicode_escape').decode('utf-8')}`, 0\n"
 
     called_funs = set()
-    for f,trips in trip_ctx.functions.items():
-        for t in trips:
+    for f_name, f_ctx in trip_ctx.functions.items():
+        for t in f_ctx.triples:
             if t.typ == TripleType.CALL:
                 called_funs.add(t.l_val.value)
 
-    called_funs = called_funs.difference(trip_ctx.functions.keys())
+    called_funs = called_funs.difference(trip_ctx.parsectx.fun_signatures.keys())
 
     for f in called_funs:
         asm += f"extern _{f}\n"

@@ -1,11 +1,12 @@
 from io import BytesIO
+
 from belfast_data import *
 import belfast_data
 import struct
 from typing import *
 from belfast_triples_opt import deepcopy_trips
 
-from belfast_triples import Buffer, TripleContext
+from belfast_triples import Buffer, FunctionTripleContext, StringRef, TripleContext
 
 def serialize_triplevalue(tv: TripleValue):
     if tv is None:
@@ -21,8 +22,11 @@ def serialize_triplevalue(tv: TripleValue):
             data_bytes = struct.pack('2s', tv.value)
         case TripleValueType.TRIPLE_REF | TripleValueType.TRIPLE_TARGET:
             data_bytes = struct.pack('I', tv.value.uid)
-        case TripleValueType.FUN_LABEL | TripleValueType.GLOBAL_LABEL | TripleValueType.GLOBAL_REF | TripleValueType.STRING_REF:
+        case TripleValueType.FUN_LABEL | TripleValueType.GLOBAL_LABEL | TripleValueType.GLOBAL_REF:
             data_bytes = tv.value.encode('utf-8')
+            data_bytes = struct.pack('B', len(data_bytes)) + data_bytes
+        case TripleValueType.STRING_REF:
+            data_bytes = tv.value.label.encode('utf-8')
             data_bytes = struct.pack('B', len(data_bytes)) + data_bytes
         case _:
             assert False
@@ -55,9 +59,8 @@ def serialize_triple(t: Triple):
     data_bytes = struct.pack('B', t.data)
     return uid_bytes + typ_bytes + op_typ_bytes + op_val_bytes + val_flags_bytes + flags_bytes + size_bytes + data_bytes + l_val_bytes + r_val_bytes
 
-def serialize_function(f: str, trip_ctx: TripleContext):
-    fun_trips = deepcopy_trips(trip_ctx.functions[f])
-    fun_ctx = trip_ctx.function_ctx[f]
+def serialize_function(f: FunctionTripleContext, f_sig: FunctionSignature):
+    fun_trips = deepcopy_trips(f.triples)
 
     # Create mappings
     bytestr_mappings = {}
@@ -71,19 +74,19 @@ def serialize_function(f: str, trip_ctx: TripleContext):
                     if tv.value not in bytestr_mappings:
                         bytestr_mappings[tv.value] = struct.pack('H', len(bytestr_mappings))
                     tv.value = bytestr_mappings[tv.value]
-                if tv.typ == TripleValueType.LOCAL_BUFFER_REF:
+                elif tv.typ == TripleValueType.LOCAL_BUFFER_REF:
                     if tv.value not in buf_mappings:
-                        buf_mappings[tv.value] = struct.pack('H', fun_ctx.local_buffers.index(tv.value))
+                        buf_mappings[tv.value] = struct.pack('H', f.local_buffers.index(tv.value))
                     tv.value = buf_mappings[tv.value]
 
     bytestring = b'\xFF\xFA'
-    f_bytes = f.encode('utf-8')
+    f_bytes = f.ctx_name.encode('utf-8')
     bytestring += struct.pack('B', len(f_bytes))
     bytestring += f_bytes
-    bytestring += struct.pack('B', trip_ctx.func_signatures[f].flags)
+    bytestring += struct.pack('B', f_sig.flags)
 
-    bytestring += struct.pack('H', len(fun_ctx.local_buffers))
-    for b in fun_ctx.local_buffers:
+    bytestring += struct.pack('H', len(f.local_buffers))
+    for b in f.local_buffers:
         bytestring += struct.pack('Q', b.size)
 
     bytestring += struct.pack('H', len(fun_trips))
@@ -93,32 +96,29 @@ def serialize_function(f: str, trip_ctx: TripleContext):
     return bytestring
 
 def serialize_program(filename: str, trip_ctx: TripleContext):
+    parsectx : ParseContext = trip_ctx.parsectx
     bytestring = b''
     # Consts
-    bytestring += b'\xAA' + struct.pack('I', len(trip_ctx.declared_consts))
-    for k,v in trip_ctx.declared_consts.items():
+    bytestring += b'\xAA' + struct.pack('I', len(parsectx.consts))
+    for k,v in parsectx.consts.items():
         name_bytes = k.encode('utf-8')
         bytestring += struct.pack('B', len(name_bytes)) + name_bytes + struct.pack('q', v)
     
     # Globals
-    bytestring += b'\xBB' + struct.pack('I', len(trip_ctx.globals))
-    for k in trip_ctx.globals:
+    bytestring += b'\xBB' + struct.pack('I', len(parsectx.globals))
+    for k in parsectx.globals:
         name_bytes = k.encode('utf-8')
         bytestring += struct.pack('B', len(name_bytes)) + name_bytes
 
-    all_strings = []
-    for ctx in trip_ctx.function_ctx.values():
-        all_strings.extend(ctx.strings.items())
-
     # Strings
-    bytestring += b'\xCC' + struct.pack('I', len(all_strings))
-    for k,v in all_strings:
+    bytestring += b'\xCC' + struct.pack('I', len(trip_ctx.strings))
+    for k,v in trip_ctx.strings.items():
         name_bytes = v.encode('utf-8')
         s_bytes = k.encode('utf-8')
         bytestring += struct.pack('B', len(name_bytes)) + name_bytes + struct.pack('I', len(s_bytes)) + s_bytes
     
-    for f in trip_ctx.functions:
-        bytestring += serialize_function(f, trip_ctx)
+    for f_name, f_ctx in trip_ctx.functions.items():
+        bytestring += serialize_function(f_ctx, parsectx.get_fun_signature(f_name))
     with open(filename, 'wb') as f:
         f.write(bytestring)
 
@@ -135,9 +135,13 @@ def deserialize_triplevalue(b: BinaryIO):
             data = unpack('2s', b)
         case TripleValueType.TRIPLE_REF | TripleValueType.TRIPLE_TARGET:
             data = unpack('I', b)
-        case TripleValueType.FUN_LABEL | TripleValueType.GLOBAL_LABEL | TripleValueType.GLOBAL_REF | TripleValueType.STRING_REF:
+        case TripleValueType.FUN_LABEL | TripleValueType.GLOBAL_LABEL | TripleValueType.GLOBAL_REF:
             length = unpack('B', b)
             data = b.read(length).decode('utf-8')
+        case TripleValueType.STRING_REF:
+            length = unpack('B', b)
+            data = StringRef('')
+            data.label = b.read(length).decode('utf-8')
         case _:
             assert False
 
@@ -264,28 +268,25 @@ def deserialize_program(filename: str):
 
     functions = {}
     func_signatures = {}
-    func_ctx = {}
     while True:
         d = deserialize_function(b)
         if not d:
             break
         f_name, f_flags, f_trips, lbufs = d
-        functions[f_name] = f_trips
+        fctx = FunctionTripleContext(None)
+        fctx.ctx_name = f_name
+        fctx.local_buffers = lbufs
+        fctx.triples = f_trips
+        functions[f_name] = fctx
         num_args = len([t for t in f_trips if t.typ == TripleType.FUN_ARG_IN])
         func_signatures[f_name] = FunctionSignature(f_name, num_args, (), f_flags)
-        fctx = TripleContext()
-        fctx.local_buffers = lbufs
-        fctx.ctx_name = f_name
-        func_ctx[f_name] = fctx
 
-    ctx = TripleContext()
-    ctx.functions = functions
-    ctx.func_signatures = func_signatures
-    ctx.strings = strings
+    ctx = ParseContext()
+    ctx.triple_fun_definitions = functions
     ctx.globals = globals
-    ctx.declared_vars = globals
-    ctx.declared_consts = consts
-    ctx.function_ctx = func_ctx
+    ctx.consts = consts
+    ctx.fun_signatures = func_signatures
+    ctx.strings = strings
     
     return ctx
 

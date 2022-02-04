@@ -1,6 +1,6 @@
 from enum import Enum, auto
 from typing import *
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 import sys
 import itertools
 
@@ -376,10 +376,12 @@ def trip_val_to_str(tv:TripleValue, as_hex=False):
                 return hex(tv.value)
             else:
                 return str(tv.value)
-        case TripleValueType.VAR_REF | TripleValueType.VAR_ASSIGN | TripleValueType.BUFFER_REF | TripleValueType.STRING_REF:
+        case TripleValueType.VAR_REF | TripleValueType.VAR_ASSIGN | TripleValueType.BUFFER_REF:
             return str(tv.value)
         case TripleValueType.LOCAL_BUFFER_REF:
             return f"buffer[{tv.value.size}]"
+        case TripleValueType.STRING_REF:
+            return tv.value.label
         case TripleValueType.TRIPLE_REF | TripleValueType.TRIPLE_TARGET:
             if tv.value is None:
                 return "(NONE)"
@@ -618,3 +620,83 @@ class FunctionSignature:
     num_args: int
     arg_names: Tuple
     flags: int
+
+class Module:
+
+    def __init__(self, name, src_file) -> None:
+        self.name = name
+        self.src_file = src_file
+        self.parse_ctx : ParseContext = None
+
+class ParseContext:
+
+    def __init__(self) -> None:
+        self.globals : Set[str] = set()
+        self.consts : Dict[str, int] = {}
+        self.structs : Dict[str, Dict[str, Tuple[int, int]]] = {}
+        self.fun_signatures : Dict[str, FunctionSignature] = {}
+
+        self.ast_fun_definitions : Dict[str, ASTNode_Fundef] = {}
+        self.triple_fun_definitions = {}
+
+        self.included_parsectx : List[ParseContext] = []
+
+        self.included_modules : Dict[str, Module] = {}
+
+    def is_global(self, v: str):
+        return v in self.globals or any([p.is_global(v) for p in self.included_parsectx])
+    
+    def declare_global(self, v:str):
+        self.globals.add(v)
+
+    def get_const(self, v: str) -> int:
+        if v in self.consts:
+            return self.consts[v]
+        else:
+            for p in self.included_parsectx:
+                c = p.get_const(v)
+                if c is not None:
+                    return c
+        return None
+
+    def declare_const(self, v:str, i: int):
+        self.consts[v] = i
+
+    def get_struct(self, v: str) -> Dict[str, Tuple[int, int]]:
+        if v in self.structs:
+            return self.structs[v]
+        else:
+            for p in self.included_parsectx:
+                c = p.get_struct(v)
+                if c is not None:
+                    return c
+        return None
+
+    def declare_struct(self, v:str, s):
+        self.structs[v] = s
+
+    def get_fun_signature(self, f: str) -> FunctionSignature:
+        if f in self.fun_signatures:
+            return self.fun_signatures[f]
+        else:
+            for p in self.included_parsectx:
+                c = p.get_fun_signature(f)
+                if c is not None:
+                    return c
+        return None
+
+    def declare_function(self, f_sig : FunctionSignature):
+        self.fun_signatures[f_sig.name] = f_sig
+    
+    def define_function_ast(self, name : str, ast: ASTNode_Fundef):
+        self.ast_fun_definitions[name] = ast
+
+    def define_function_triples(self, name : str, trips: List[Triple]):
+        self.triple_fun_definitions[name] = trips
+
+    def include_parse_context(self, p: 'ParseContext'):
+        self.included_parsectx.append(p)
+
+    def include_module(self, m: Module):
+        self.included_modules[m.name] = m
+        self.include_parse_context(m.parse_ctx)
