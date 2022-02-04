@@ -12,6 +12,8 @@ test
 !print_d.asm
 prog
 prog.bl
+*.blc
+*.bli
 belfastsyntaxhighlight/
 tmp/
 bin/

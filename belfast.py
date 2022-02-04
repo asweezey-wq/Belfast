@@ -6,6 +6,7 @@ from belfast_triples import *
 from belfast_triples_opt import OPTIMIZATION_FLAGS, optimize_triples
 from belfast_x86 import convert_function_to_asm, get_asm_header, get_asm_footer, optimize_x86, output_x86_trips_to_str
 import re
+from belfast_serialize import deserialize_program, serialize_program
 
 keyword_regex = r'(?:(' + ('|'.join(KEYWORD_NAMES.keys())) + r')(?=\s|$|;))'
 builtins_regex = r'(' + ('|'.join(BUILTINS_NAMES.keys())) + r')'
@@ -160,15 +161,20 @@ def parse_tokens(tokens: List[Token]):
     global_vars: Set[str] = set()
 
     declared_funs: Dict[str, ASTNode_Base] = {}
+    fun_signatures: Dict[str, FunctionSignature] = {}
+    defining_fun_signature: Optional[FunctionSignature] = None
     defining_function = False
-    defining_function_name = ''
-    defining_function_flags = 0
     defining_fun_body = []
-    defining_function_args = []
 
     declared_consts : Dict[str, ASTNode_Base] = {}
 
     declared_structs : Dict[str, Dict[str, Tuple[int, int]]] = {}
+
+    included_globals = set()
+    included_consts = set()
+    included_structs = set()
+    included_functions = set()
+    included_files = set()
 
     def evaluate_const(exp: ASTNode_Base):
         match exp.typ:
@@ -494,7 +500,7 @@ def parse_tokens(tokens: List[Token]):
         return ASTNode_Number(ASTType.NUMBER, tok, sz)
 
     def parse_function_def():
-        nonlocal index, defining_function, defining_fun_body, defining_function_args, defining_function_name, defining_function_flags
+        nonlocal index, defining_function, defining_fun_body, defining_fun_signature
         tok = expect_keyword(Keyword.FUN)
         # if len(declared_vars):
         #     compiler_error(tok.loc, "Variables declared outside of function")
@@ -528,10 +534,8 @@ def parse_tokens(tokens: List[Token]):
         expect_keyword(Keyword.DO)
 
         defining_function = True
-        defining_function_name = ident_tok.value
         defining_fun_body = []
-        defining_function_args = args
-        defining_function_flags = fun_flags
+        defining_fun_signature = FunctionSignature(ident_tok.value, len(args), tuple(args), fun_flags)
 
         while True:
             tok = tokens[index]
@@ -549,10 +553,9 @@ def parse_tokens(tokens: List[Token]):
         defining_function = False
         fundef = ASTNode_Fundef(ASTType.FUN_DEF, ident_tok, ident_tok.value, fun_flags, args, defining_fun_body)
         declared_funs[ident_tok.value] = fundef
+        fun_signatures[ident_tok.value] = defining_fun_signature
         defining_fun_body = []
-        defining_function_args = []
-        defining_function_name = ''
-        defining_function_flags = 0
+        defining_fun_signature = None
 
         declared_vars.clear()
 
@@ -562,13 +565,12 @@ def parse_tokens(tokens: List[Token]):
         nonlocal index
         assert t.typ == TokenType.IDENTIFIER
         expect_token(TokenType.OPEN_PAREN)
-        if t.value in declared_funs:
-            func = declared_funs[t.value]
-            num_expected_args = len(func.args)
-        elif t.value == defining_function_name:
-            if defining_function_flags & SF_INLINE:
+        if t.value in fun_signatures:
+            num_expected_args = fun_signatures[t.value].num_args
+        elif defining_function and t.value == defining_fun_signature.name:
+            if defining_fun_signature.flags & SF_INLINE:
                 compiler_error(t.loc, "Recursive calls are not supported in inline functions")
-            num_expected_args = len(defining_function_args)
+            num_expected_args = defining_fun_signature.num_args
         arg_exp = []
         while True:
             tok = tokens[index]
@@ -622,11 +624,11 @@ def parse_tokens(tokens: List[Token]):
                 t = expect_token(TokenType.IDENTIFIER)
                 if t.value in declared_vars:
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
-                elif defining_function and t.value in defining_function_args:
+                elif defining_function and t.value in defining_fun_signature.arg_names:
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
-                elif defining_function and t.value == defining_function_name:
+                elif defining_function and t.value == defining_fun_signature.name:
                     return parse_funcall(t)
-                elif t.value in declared_funs:
+                elif t.value in fun_signatures:
                     return parse_funcall(t)
                 elif t.value in global_vars:
                     return ASTNode_Ident(ASTType.VAR_REF, value=t, ident_str=t.value)
@@ -694,23 +696,45 @@ def parse_tokens(tokens: List[Token]):
         tok = expect_keyword(Keyword.INCLUDE)
         file_tok = expect_token(TokenType.IDENTIFIER)
         filename = file_tok.value + '.bl'
+        cfile = file_tok.value + '.blc'
         f = None
         for i_dir in belfast_data.COMPILER_SETTINGS.include_dirs:
             f = os.path.join(i_dir, filename)
+            fc = os.path.join(i_dir, cfile)
+            if os.path.exists(fc):
+                if not os.path.isfile(fc):
+                    compiler_error(file_tok.loc, f"{fc} must be a file")
+                else:
+                    ctx: TripleContext = deserialize_program(fc)
+                    inc_vars = ctx.declared_vars
+                    inc_sigs = ctx.func_signatures
+                    inc_consts = {k:ASTNode_Number(ASTType.NUMBER, None, v) for k,v in ctx.declared_consts.items()}
+                    inc_structs = []
+                    included_files.add(ctx)
+                    break
             if os.path.exists(f):
                 if not os.path.isfile(f):
                     compiler_error(file_tok.loc, f"{f} must be a file")
-                break
+                else:
+                    inc_a, inc_vars, inc_funs, inc_sigs, inc_consts, inc_structs, _ = file_to_ast(f)
+                    included_files.add(f)
+                    break
+
         else:
             compiler_error(file_tok.loc, f"Could not find any matching Belfast file \"{filename}\". Check that you included the directory containing that file.")
         if belfast_data.COMPILER_SETTINGS.verbose >= 1:
             print(f"[INFO] Including {f}")
-        inc_a, inc_vars, inc_funs, inc_consts, inc_structs = file_to_ast(f)
-        ast.extend(inc_a)
+        # ast.extend(inc_a)
         global_vars.update(inc_vars)
-        declared_funs.update(inc_funs)
+        # declared_funs.update(inc_funs)
+        fun_signatures.update(inc_sigs)
         declared_consts.update(inc_consts)
         declared_structs.update(inc_structs)
+
+        included_functions.update(inc_sigs.values())
+        included_globals.update(inc_vars)
+        included_consts.update(inc_consts.keys())
+        included_structs.update(inc_structs)
 
     def parse_statement():
         tok = tokens[index]
@@ -784,7 +808,15 @@ def parse_tokens(tokens: List[Token]):
             case _:
                 compiler_error(tokens[index].loc, f"Unexpected token {tokens[index].typ.name}")
     
-    return ast, global_vars, declared_funs, declared_consts, declared_structs
+    include_data_dict = {
+        'globals': included_globals,
+        'functions': included_functions,
+        'structs': included_structs,
+        'consts': included_consts,
+        'files': included_files
+    }
+
+    return ast, global_vars, declared_funs, fun_signatures, declared_consts, declared_structs, include_data_dict
 
 def print_ast(ast:ASTNode_Base, indent=0):
     indent_str = ' | ' * indent
@@ -866,25 +898,35 @@ def file_to_ast(filename: str):
     return parse_tokens(toks)
 
 def compile(filename: str, do_stat=None):
-    ast = file_to_ast(filename)[0]
+    dat = file_to_ast(filename)
+    ast = dat[0]
+    include_data = dat[-1]
+    fun_signatures = dat[3]
     
-    trips, trip_ctx = triples_parse_program(ast)
+    trips, trip_ctx = triples_parse_program(ast, fun_signatures)
 
-    if 'main' not in trip_ctx.functions:
-        compiler_error((filename, 1, 1), "No 'main' function found")
+    # Mix-in include data
+    trip_ctx.included_files.update(include_data['files'])
+    trip_ctx.included_functions.update(include_data['functions'])
+    trip_ctx.included_globals.update(include_data['globals'])
+
+    trip_ctx.declared_consts = {k:v.num_value for k,v in dat[4].items() if k not in include_data['consts']}
+    trip_ctx.globals = {v for v in trip_ctx.declared_vars if v not in include_data['globals']}
+    # if 'main' not in trip_ctx.functions:
+    #     compiler_error((filename, 1, 1), "No 'main' function found")
 
     asm = get_asm_header()
 
     x86_tripstr = ""
     prog_tripstr = ""
 
-    called_funs = list(get_call_graph(trip_ctx.functions['main'], trip_ctx.functions, visited_funs=('main',)))
+    # called_funs = list(get_call_graph(trip_ctx.functions['main'], trip_ctx.functions, visited_funs=('main',)))
 
-    called_funs.append('main')
+    # called_funs.append('main')
 
     stats = {}
 
-    for f_name in called_funs:
+    for f_name in trip_ctx.functions.keys():
         f_trips = trip_ctx.functions[f_name]
         prog_tripstr += f"FUNCTION {f_name}\n"
         index_triples(f_trips)
@@ -913,9 +955,13 @@ def compile(filename: str, do_stat=None):
         with open(belfast_data.COMPILER_SETTINGS.tripstr_filename + '.x86', 'w') as f:
             f.write(x86_tripstr)
 
-    
+    if belfast_data.COMPILER_SETTINGS.generate_ref != '':
+        serialize_program(belfast_data.COMPILER_SETTINGS.generate_ref, trip_ctx)
+        if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+            print(f"[INFO] Generated reference file {belfast_data.COMPILER_SETTINGS.generate_ref}")
+
     if belfast_data.COMPILER_SETTINGS.generate_asm:
-        asm += get_asm_footer(trip_ctx, called_funs)
+        asm += get_asm_footer(trip_ctx)
         with open(belfast_data.COMPILER_SETTINGS.output_filename, 'w') as f_asm:
             f_asm.write(asm)
 
@@ -964,6 +1010,7 @@ if __name__ == '__main__':
     argp.add_argument('-s', '--stat', dest='stat', help='Stat the code generation')
     argp.add_argument('-d', '--diff', dest='diff', action='store', help='Store the optimization diff files in the provided directory')
     argp.add_argument('-I', '--include', dest='include', action='append', help='Tells the compiler where to search for included files')
+    argp.add_argument('-R', '--gen-ref', dest='gen_ref', action='store_true', help='Generates the Belfast Reference files for module inclusion')
     args = argp.parse_args()
 
     filename = args.file
@@ -998,6 +1045,13 @@ if __name__ == '__main__':
             print("ERROR: You must provide a valid directory to put the IR diff files in")
             sys.exit(1)
         belfast_data.COMPILER_SETTINGS.tripopt_dir = args.diff
+
+    if args.gen_ref:
+        if filename.endswith('.bl'):
+            ref_filename = filename[:-3] + '.blc'
+        else:
+            ref_filename = filename + '.blc'
+        belfast_data.COMPILER_SETTINGS.generate_ref = ref_filename
 
     if args.include:
         for i in args.include:

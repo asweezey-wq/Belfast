@@ -933,14 +933,14 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Triple
 def get_asm_header():
     return HEADER
 
-def get_asm_footer(trip_ctx: TripleContext, called_funs: Set[str]):
+def get_asm_footer(trip_ctx: TripleContext):
     did_segment = False
     asm = ""
 
     all_buffers = dict(trip_ctx.buffers)
     all_strings = dict(trip_ctx.strings)
     all_global_vars = set(trip_ctx.declared_vars)
-    for f in called_funs:
+    for f in trip_ctx.functions:
         c = trip_ctx.function_ctx[f]
         all_buffers.update(c.buffers)
         all_strings.update(c.strings)
@@ -962,5 +962,16 @@ def get_asm_footer(trip_ctx: TripleContext, called_funs: Set[str]):
         asm += "\tsegment .data\n"
         for s, labl in all_strings.items():
             asm += f"{labl}: db `{s.encode('unicode_escape').decode('utf-8')}`, 0\n"
+
+    called_funs = set()
+    for f,trips in trip_ctx.functions.items():
+        for t in trips:
+            if t.typ == TripleType.CALL:
+                called_funs.add(t.l_val.value)
+
+    called_funs = called_funs.difference(trip_ctx.functions.keys())
+
+    for f in called_funs:
+        asm += f"extern _{f}\n"
 
     return asm

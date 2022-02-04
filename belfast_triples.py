@@ -11,8 +11,13 @@ class TripleContext:
     def __init__(self):
         self.declared_vars: Set[str] = set()
         self.globals : Set[str] = set()
+        self.declared_consts: Dict[str, int] = {}
         self.functions = {}
-        self.func_flags = {}
+        self.included_functions = set()
+        self.included_globals = set()
+        self.included_strings = set()
+        self.included_files = set()
+        self.func_signatures: Dict[str, FunctionSignature] = {}
         self.function_ctx = {}
         self.buffers: Dict[str, int] = {}
         self.local_buffers: List[Buffer] = []
@@ -36,9 +41,9 @@ class TripleContext:
     def declare_variable(self, name:str):
         self.declared_vars.add(name)
 
-    def declare_function(self, name:str, flags: int, trips: List[Triple], trip_ctx: 'TripleContext'):
+    def declare_function(self, name: str, trips: List[Triple], trip_ctx: 'TripleContext'):
+        assert name in self.func_signatures
         self.functions[name] = trips
-        self.func_flags[name] = flags
         self.function_ctx[name] = trip_ctx
 
     def create_subctx(self):
@@ -52,7 +57,7 @@ class TripleContext:
         tctx.active_break_label = self.active_break_label
         tctx.function_return_label = self.function_return_label
         tctx.function_return_var = self.function_return_var
-        tctx.func_flags = self.func_flags
+        tctx.func_signatures = self.func_signatures
         tctx.functions = self.functions
         tctx.globals = self.globals
         return tctx
@@ -113,19 +118,13 @@ def index_triples(trips:List[Triple]):
     for i,val in enumerate(trips):
         val.index = i
 
-def triples_parse_program(ast_list: List[ASTNode_Base]):
+def triples_parse_program(ast_list: List[ASTNode_Base], fun_signatures: Dict[str, FunctionSignature]):
     ctx = TripleContext()
-    ctx.ctx_name = 'main'
-    ret_label = Triple(TripleType.LABEL, None, None, None, uid=triple_uid())
-    ctx.function_return_label = ret_label
-    ctx.function_return_var = "$main_return"
+    ctx.ctx_name = 'global'
+    ctx.func_signatures = fun_signatures
     trips = []
     for a in ast_list:
         t, _ = ast_to_triples(a, ctx)
-        trips.extend(t)
-    trips.append(Triple(TripleType.ASSIGN, None, create_var_assign_value(ctx.function_return_var), create_const_value(0), uid=triple_uid()))
-    trips.append(ret_label)
-    trips.append(Triple(TripleType.RETURN, None, create_var_ref_value(ctx.function_return_var), None, uid=triple_uid()))
     return trips, ctx
 
 def get_call_graph(trips: List[Triple], funs: Dict[str, List[Triple]], visited_funs=()):
@@ -133,13 +132,13 @@ def get_call_graph(trips: List[Triple], funs: Dict[str, List[Triple]], visited_f
     new_funs = []
     for t in trips:
         if t.typ == TripleType.CALL:
-            assert t.l_val.value in funs
             if t.l_val.value not in vis:
-                new_funs.append(t.l_val.value)
                 vis.add(t.l_val.value)
+                new_funs.append(t.l_val.value)
     ret_funs = set()
     for t in new_funs:
-        ret_funs.update(get_call_graph(funs[t], funs, tuple(vis)))
+        if t in funs:
+            ret_funs.update(get_call_graph(funs[t], funs, tuple(vis)))
         ret_funs.add(t)
     return ret_funs
 
@@ -350,7 +349,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             scoped_ctx.string_offs = len(ctx.strings) + ctx.string_offs
             scoped_ctx.declared_vars.update(args)
             scoped_ctx.globals = ctx.declared_vars
-            scoped_ctx.func_flags = ctx.func_flags
+            scoped_ctx.func_signatures = ctx.func_signatures
             scoped_ctx.functions = ctx.functions
             scoped_ctx.ctx_name = fun_name
             end_label = Triple(TripleType.LABEL, None, None, None, uid=triple_uid())
@@ -366,7 +365,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
             fun_triples.append(Triple(TripleType.RETURN, None, create_var_ref_value(scoped_ctx.function_return_var), None, uid=triple_uid()))
             ctx.buffer_offs += len(scoped_ctx.buffers)
             ctx.string_offs += len(scoped_ctx.strings)
-            ctx.declare_function(fun_name, ast.fun_flags, fun_triples, scoped_ctx)
+            ctx.declare_function(fun_name, fun_triples, scoped_ctx)
         case ASTType.FUN_CALL:
             fun_name = ast.fun_name
             arg_vals = []
@@ -431,7 +430,7 @@ def ast_to_triples(ast:ASTNode_Base, ctx:TripleContext):
                         triples.append(new_t)
                 trip_val = return_val
 
-            if fun_name in ctx.func_flags and ctx.func_flags[fun_name] & SF_INLINE:
+            if fun_name in ctx.func_signatures and ctx.func_signatures[fun_name].flags & SF_INLINE:
                 inline_funcall()
             else:
                 for i,a in enumerate(arg_vals):

@@ -569,6 +569,7 @@ class CompilerSettings:
     generate_tripstr: bool = False
     tripstr_filename: str = 'prog.tripstr'
     tripopt_dir: str = 'tripstr'
+    generate_ref: str = ''
     generate_diff: bool = False
     generate_asm: bool = True
     verbose: int = 0
@@ -610,3 +611,10 @@ def evaluate_stat_score(s: CodeScoreStat):
     score += s.fun_calls * 3
     return score
 
+
+@dataclass(frozen=True)
+class FunctionSignature:
+    name: str
+    num_args: int
+    arg_names: Tuple
+    flags: int
