@@ -17,11 +17,11 @@ def serialize_triplevalue(tv: TripleValue):
             assert False
         case TripleValueType.CONSTANT:
             data_bytes = struct.pack('q', tv.value)
-        case TripleValueType.VAR_REF | TripleValueType.LOCAL_BUFFER_REF | TripleValueType.STRING_REF | TripleValueType.VAR_ASSIGN:
+        case TripleValueType.VAR_REF | TripleValueType.LOCAL_BUFFER_REF | TripleValueType.VAR_ASSIGN:
             data_bytes = struct.pack('2s', tv.value)
         case TripleValueType.TRIPLE_REF | TripleValueType.TRIPLE_TARGET:
             data_bytes = struct.pack('I', tv.value.uid)
-        case TripleValueType.FUN_LABEL | TripleValueType.GLOBAL_LABEL | TripleValueType.GLOBAL_REF:
+        case TripleValueType.FUN_LABEL | TripleValueType.GLOBAL_LABEL | TripleValueType.GLOBAL_REF | TripleValueType.STRING_REF:
             data_bytes = tv.value.encode('utf-8')
             data_bytes = struct.pack('B', len(data_bytes)) + data_bytes
         case _:
@@ -67,7 +67,7 @@ def serialize_function(f: str, trip_ctx: TripleContext):
         rv = t.r_val
         for tv in (lv, rv):
             if tv is not None:
-                if tv.typ in [TripleValueType.VAR_REF, TripleValueType.VAR_ASSIGN, TripleValueType.STRING_REF]:
+                if tv.typ in [TripleValueType.VAR_REF, TripleValueType.VAR_ASSIGN]:
                     if tv.value not in bytestr_mappings:
                         bytestr_mappings[tv.value] = struct.pack('H', len(bytestr_mappings))
                     tv.value = bytestr_mappings[tv.value]
@@ -131,11 +131,11 @@ def deserialize_triplevalue(b: BinaryIO):
     match typ:
         case TripleValueType.CONSTANT:
             data = unpack('q', b)
-        case TripleValueType.VAR_REF | TripleValueType.LOCAL_BUFFER_REF | TripleValueType.STRING_REF | TripleValueType.VAR_ASSIGN:
+        case TripleValueType.VAR_REF | TripleValueType.LOCAL_BUFFER_REF | TripleValueType.VAR_ASSIGN:
             data = unpack('2s', b)
         case TripleValueType.TRIPLE_REF | TripleValueType.TRIPLE_TARGET:
             data = unpack('I', b)
-        case TripleValueType.FUN_LABEL | TripleValueType.GLOBAL_LABEL | TripleValueType.GLOBAL_REF:
+        case TripleValueType.FUN_LABEL | TripleValueType.GLOBAL_LABEL | TripleValueType.GLOBAL_REF | TripleValueType.STRING_REF:
             length = unpack('B', b)
             data = b.read(length).decode('utf-8')
         case _:
@@ -208,11 +208,6 @@ def deserialize_function(b: BinaryIO):
                     tv.value = deserialize_names[tv.value]
                 elif tv.typ == TripleValueType.LOCAL_BUFFER_REF:
                     tv.value = local_buffers[struct.unpack('H', tv.value)[0]]
-                elif tv.typ == TripleValueType.STRING_REF:
-                    if tv.value not in deserialize_names:
-                        deserialize_names[tv.value] = f'string{num_strings}'
-                        num_strings += 1
-                    tv.value = deserialize_names[tv.value]
         trips.append(t)
         trips_by_uid[t.uid] = t
         if t.uid in deferred_refs:
@@ -222,11 +217,14 @@ def deserialize_function(b: BinaryIO):
 
     assert len(deferred_refs) == 0
 
+    for t in trips:
+        t.uid = belfast_data.triple_uid()
+
     signature = b.read(2)
     if signature != b'\xFF\xFB':
         return None
 
-    return f_name, f_flags, trips
+    return f_name, f_flags, trips, local_buffers
 
 def deserialize_program(filename: str):
     bytestring = b''
@@ -266,14 +264,19 @@ def deserialize_program(filename: str):
 
     functions = {}
     func_signatures = {}
+    func_ctx = {}
     while True:
         d = deserialize_function(b)
         if not d:
             break
-        f_name, f_flags, f_trips = d
+        f_name, f_flags, f_trips, lbufs = d
         functions[f_name] = f_trips
         num_args = len([t for t in f_trips if t.typ == TripleType.FUN_ARG_IN])
         func_signatures[f_name] = FunctionSignature(f_name, num_args, (), f_flags)
+        fctx = TripleContext()
+        fctx.local_buffers = lbufs
+        fctx.ctx_name = f_name
+        func_ctx[f_name] = fctx
 
     ctx = TripleContext()
     ctx.functions = functions
@@ -282,6 +285,7 @@ def deserialize_program(filename: str):
     ctx.globals = globals
     ctx.declared_vars = globals
     ctx.declared_consts = consts
+    ctx.function_ctx = func_ctx
     
     return ctx
 

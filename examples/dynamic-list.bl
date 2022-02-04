@@ -1,5 +1,5 @@
-include "stdmem.bl"
-include "stdlib.bl"
+include stdmem
+include stdlib
 
 struct list
     size 4

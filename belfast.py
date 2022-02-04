@@ -711,6 +711,7 @@ def parse_tokens(tokens: List[Token]):
                     inc_consts = {k:ASTNode_Number(ASTType.NUMBER, None, v) for k,v in ctx.declared_consts.items()}
                     inc_structs = []
                     included_files.add(ctx)
+                    f = fc
                     break
             if os.path.exists(f):
                 if not os.path.isfile(f):
@@ -976,16 +977,54 @@ def compile(filename: str, do_stat=None):
             print("ERROR: stat argument should be '1' or '2'", file=sys.stderr)
             sys.exit(1)
 
+def compile_blc(filename: str):
+    trip_ctx = deserialize_program(filename)
+    asm = get_asm_header()
+
+    x86_tripstr = ""
+    prog_tripstr = ""
+
+
+    for f_name in trip_ctx.functions.keys():
+        f_trips = trip_ctx.functions[f_name]
+        fun_ctx = trip_ctx.function_ctx[f_name]
+        prog_tripstr += f"FUNCTION {f_name}\n"
+        index_triples(f_trips)
+        for t in f_trips:
+            prog_tripstr += f"{print_triple(t)}\n"
+        if belfast_data.COMPILER_SETTINGS.generate_asm:
+            f_trips = optimize_x86(f_trips, fun_ctx)
+            x86_tripstr += f"FUNCTION {f_name}\n"
+            x86_tripstr += output_x86_trips_to_str(f_trips, fun_ctx)
+            x86_tripstr += "\n"
+            stat = CodeScoreStat()
+            asm += convert_function_to_asm(f_name, f_trips, fun_ctx, stat)
+        prog_tripstr += "\n"
+
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print("[INFO] Compiled successfully")
+
+    if belfast_data.COMPILER_SETTINGS.generate_tripstr:
+        with open(belfast_data.COMPILER_SETTINGS.tripstr_filename, 'w') as f:
+            f.write(prog_tripstr)
+        with open(belfast_data.COMPILER_SETTINGS.tripstr_filename + '.x86', 'w') as f:
+            f.write(x86_tripstr)
+
+    if belfast_data.COMPILER_SETTINGS.generate_asm:
+        asm += get_asm_footer(trip_ctx)
+        with open(belfast_data.COMPILER_SETTINGS.output_filename, 'w') as f_asm:
+            f_asm.write(asm)
+
 def build_executable():
     if not belfast_data.COMPILER_SETTINGS.generate_asm:
-        print("ERROR: You must enable x86 aseembly generation to run the program", file=sys.stderr)
+        print("ERROR: You must enable x86 assembly generation to run the program", file=sys.stderr)
         sys.exit(1)
     
     cmd = f"nasm -fmacho64 {belfast_data.COMPILER_SETTINGS.output_filename} -o a.out.o"
     if belfast_data.COMPILER_SETTINGS.verbose >= 1:
         print(f"[INFO] Executing '{cmd}'")
     os.system(cmd)
-    cmd = f"ld -lSystem -L$(xcode-select -p)/SDKs/MacOSX.sdk/usr/lib a.out.o -o a.out"
+    cmd = f"ld -lSystem -L$(xcode-select -p)/SDKs/MacOSX.sdk/usr/lib a.out.o std/*.o -o a.out"
     if belfast_data.COMPILER_SETTINGS.verbose >= 1:
         print(f"[INFO] Executing '{cmd}'")
     os.system(cmd)
@@ -1000,7 +1039,8 @@ if __name__ == '__main__':
     argp = argparse.ArgumentParser(description='The Belfast Compiler')
     argp.add_argument('file', help='The file input to the compiler')
     argp.add_argument('-o', '--output', dest='output', help='The output assembly file', default='prog.asm')
-    argp.add_argument('-c', '--do-comments', dest='do_comments', action='store_true', help='Turn off the comments generated in assembly')
+    argp.add_argument('--comment', dest='do_comments', action='store_true', help='Turn on the comments generated in assembly')
+    argp.add_argument('-c', '--compile-blc', dest="compile_blc", action='store_true', help='Compiled a .blc file')
     argp.add_argument('--ir', dest='ir', action='store', help='Generate the IR files')
     argp.add_argument('--no-asm', dest='no_asm', action='store_true', help='Don\'t generate the assembly')
     argp.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='Enable verbose mode')
@@ -1052,6 +1092,7 @@ if __name__ == '__main__':
         else:
             ref_filename = filename + '.blc'
         belfast_data.COMPILER_SETTINGS.generate_ref = ref_filename
+        belfast_data.COMPILER_SETTINGS.generate_asm = False
 
     if args.include:
         for i in args.include:
@@ -1074,7 +1115,10 @@ if __name__ == '__main__':
     OPTIMIZATION_FLAGS['const-eval'] = belfast_data.COMPILER_SETTINGS.const_propagation
     OPTIMIZATION_FLAGS['value-forwarding'] = belfast_data.COMPILER_SETTINGS.const_propagation
 
-    compile(filename, do_stat=args.stat)
+    if args.compile_blc:
+        compile_blc(filename)
+    else:
+        compile(filename, do_stat=args.stat)
 
     if args.run:
         build_executable()

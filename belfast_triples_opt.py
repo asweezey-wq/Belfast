@@ -548,7 +548,7 @@ def annotate_triples(trips: List[Triple], trip_ctx: TripleContext):
                     # If the condition for this branch is the preceding triple
                     if OPTIMIZATION_FLAGS["cmp-forward"]:
                         trips[i - 1].flags |= TF_BOOL_FORWARDED
-        if t.typ == TripleType.FUN_ARG_IN or t.typ == TripleType.SYSCALL:
+        elif t.typ == TripleType.FUN_ARG_IN or t.typ == TripleType.SYSCALL:
             continue
 
 def get_reference_data(trips: List[Triple], trip_ctx: TripleContext):
