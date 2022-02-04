@@ -214,11 +214,6 @@ def ast_to_triples(ast:ASTNode_Base, ctx:Union[TripleContext, FunctionTripleCont
             else:
                 triples.append(Triple(TripleType.UNARY_OP, op=op, l_val=exp_trip_val, r_val=None, uid=triple_uid()))
             trip_val = create_tref_value(triples[-1])
-        case ASTType.PRINT:
-            exp_trips, exp_trip_val = ast_to_triples(ast.ast_ref, ctx)
-            triples.extend(exp_trips)
-            triples.append(Triple(TripleType.PRINT, op=Keyword.PRINT, l_val=exp_trip_val, r_val=None, uid=triple_uid()))
-            trip_val = None
         case ASTType.VAR_DECL:
             pass
         case ASTType.VAR_DECL_ASSIGN:

@@ -267,7 +267,7 @@ def get_uses(triple: Triple, colored_only=True):
                 vals.append(triple.l_val)
             if triple.typ == TripleType.BINARY_OP and triple.op in [Operator.DIVIDE, Operator.MODULUS, Operator.MULTIPLY]:
                 vals.append(create_register_value(RDX_INDEX))
-        case TripleType.UNARY_OP | TripleType.IF_COND | TripleType.PRINT | TripleType.NOP_USE | TripleType.NOP_REF | TripleType.LOAD | TripleType.ARG | TripleType.RETURN:
+        case TripleType.UNARY_OP | TripleType.IF_COND | TripleType.NOP_USE | TripleType.NOP_REF | TripleType.LOAD | TripleType.ARG | TripleType.RETURN:
             if triple.typ == TripleType.IF_COND and triple.l_val.typ == TripleValueType.TRIPLE_REF and (triple.l_val.value.flags & TF_BOOL_FORWARDED) > 0:
                 return ()
             if not colored_only or does_value_need_color(triple.l_val):

@@ -10,7 +10,6 @@ Loc = Tuple[str, int, int]
 
 class Keyword(Enum):
     VAR = auto()
-    PRINT = auto()
     IF = auto()
     THEN = auto()
     END = auto()
@@ -82,7 +81,6 @@ class Operator(Enum):
 
 KEYWORD_NAMES = {
     'var': Keyword.VAR,
-    'print': Keyword.PRINT,
     'if': Keyword.IF,
     'then': Keyword.THEN,
     'end': Keyword.END,
@@ -172,7 +170,6 @@ class ASTType(Enum):
     UNARY_OP = auto()
     BINARY_OP = auto()
     ASSIGN = auto()
-    PRINT = auto()
     IF = auto()
     WHILE = auto()
     DO_WHILE = auto()
@@ -315,7 +312,6 @@ def compiler_error(loc:Loc, message):
 class TripleType(Enum):
     BINARY_OP = auto()
     UNARY_OP = auto()
-    PRINT = auto()
     ASSIGN = auto()
     IF_COND = auto()
     GOTO = auto()

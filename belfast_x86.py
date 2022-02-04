@@ -571,10 +571,6 @@ def move_instr(reg:int, tv: TripleValue, trip_ctx: Context_x86):
 
 def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Context_x86, code_stats: CodeScoreStat):
     asm = ""
-    # if any([t.typ == TripleType.PRINT for t in trips]) and not trip_ctx.has_generated_print_code:
-    #     with open('./print_d.asm', 'r') as f:
-    #         asm += f.read() + "\n"
-    #     trip_ctx.has_generated_print_code = True
     asm += f"    global _{fun_name}\n_{fun_name}:\n"
     def write_asm(s):
         nonlocal asm
@@ -892,20 +888,6 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Contex
                     write_asm(move_instr(t_reg, lv, trip_ctx))
                     code_stats.syscalls += 1
                     write_asm("syscall")
-                case TripleType.PRINT:
-                    assert False
-                    # save_regs = list(filter(lambda x: x in DATA_REGISTERS, trip_ctx.get_all_used_registers(t.index+1)))
-                    # for r in save_regs:
-                    #     code_stats.mem_stores += 1
-                    #     write_asm(f"push {reg_str_for_size(r)}")
-                    # if lv.typ != TripleValueType.REGISTER or lv.value != RDI_INDEX:
-                    #     stat_move(lv, code_stats)
-                    #     write_asm(move_instr(RDI_INDEX, lv, trip_ctx))
-                    # code_stats.fun_calls += 1
-                    # write_asm("call _printd")
-                    # for r in reversed(save_regs):
-                    #     code_stats.mem_loads += 1
-                    #     write_asm(f"pop {reg_str_for_size(r)}")
                 case TripleType.NOP_USE:
                     pass
                 case TripleType.NOP_REF:

@@ -212,11 +212,6 @@ def parse_tokens(tokens: List[Token]):
             parsectx.declare_global(varname)
             return ASTNode_Ident(ASTType.VAR_DECL, var_tok, ident_tok.value)
 
-    def parse_print_stmt():
-        print_tok = expect_keyword(Keyword.PRINT)
-        exp = parse_expression()
-        return ASTNode_Single(ASTType.PRINT, value=print_tok, ast_ref = exp)
-
     def parse_if_stmt(elif_tok=False):
         nonlocal index
         if_tok = expect_keyword(Keyword.IF if not elif_tok else Keyword.ELIF)
@@ -724,8 +719,6 @@ def parse_tokens(tokens: List[Token]):
                 match tok.value:
                     case Keyword.VAR:
                         return_ast = parse_var_decl()
-                    case Keyword.PRINT:
-                        return_ast = parse_print_stmt()
                     case Keyword.IF:
                         return_ast = parse_if_stmt()
                     case Keyword.SYSCALL:
@@ -822,8 +815,6 @@ def print_ast(ast:ASTNode_Base, indent=0):
             assert isinstance(ast, ASTNode_Ident), "Expected Ident AST"
         case ASTType.NUMBER | ASTType.BUFFER_ALLOC:
             assert isinstance(ast, ASTNode_Number), "Expected Number AST"
-        case ASTType.PRINT:
-            print_ast(ast.ast_ref, indent+1)
         case ASTType.IF:
             assert isinstance(ast, ASTNode_If), "Expected If AST"
             print_ast(ast.cond_ast, indent+1)
