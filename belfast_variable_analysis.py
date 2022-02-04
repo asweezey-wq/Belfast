@@ -289,12 +289,14 @@ def get_uses(triple: Triple, colored_only=True):
         return tuple(new_vals)
     return ()
 
-def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
+def identify_loops(opt_ctx: OptimizationContext) -> bool:
     did_change = False
-    if len(blocks) == 0:
-        return False
     block_visit = {}
     dom_map = {}
+    blocks = opt_ctx.blocks
+    if len(blocks) == 0:
+        return False
+    trips = opt_ctx.trips
     open_block_set = [blocks[0]]
     while len(open_block_set) > 0:
         b = open_block_set.pop(0)
@@ -505,6 +507,8 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
                         assert v is not None
                         derived_induction_vars[d] = (v, a, b, c, d_)
 
+        index_triples(trips)
+
         # print(derived_induction_vars)
         ind_defines = []
         ind_step_trips = []
@@ -567,6 +571,7 @@ def identify_loops(trips: List[Triple], blocks: List[TripleBlock]) -> bool:
 
         for t in triple_inserts:
             trips.insert(t.index, t)
+        index_triples(trips)
         new_labels = []
         if len(loop_pre_header) > 0:
             ind_offs = b1.trips[0].index

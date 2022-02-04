@@ -1,3 +1,5 @@
+from copy import copy
+from lib2to3.pgen2.token import OP
 import belfast_data
 from belfast_triples import *
 from typing import *
@@ -23,6 +25,150 @@ def set_opt_flags(f: dict):
     OPTIMIZATION_FLAGS = f
 
 CHANGE_HINTS = {}
+
+class OptimizationContext:
+
+    def __init__(self, trips) -> None:
+        self.trips = trips
+        self.triple_references = None
+        self.label_references = None
+        self.blocks = None
+        self.dominance_map = {}
+    
+    def recalculate_blocks(self):
+        self.blocks = build_control_flow(self.trips)
+        for b in self.blocks:
+            evaluate_block_value_usage(b)
+        propagate_block_values(self.blocks)
+        self.dominance_map = create_dominance_map(self.blocks)
+
+    def evaluate_triple_references(self):
+        self.triple_references = get_reference_data(self.trips)
+    
+    def evaluate_label_references(self):
+        self.label_references = {}
+        for t in filter(lambda x: x.typ == TripleType.LABEL, self.trips):
+            self.label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, self.trips))
+
+    def retarget_triple_references(self, t: Triple, new_tv: TripleValue, change_hint=None):
+        cnt = len(self.triple_references[t])
+        for ref_t in self.triple_references[t]:
+            val = get_triple_reference_value(ref_t, t)
+            if val:
+                if val == ref_t.l_val:
+                    ref_t.l_val = copy(new_tv)
+                elif val == ref_t.r_val:
+                    ref_t.r_val = copy(new_tv)
+                else:
+                    assert False
+                if change_hint:
+                    CHANGE_HINTS[ref_t] = change_hint
+        del self.triple_references[t]
+        return cnt
+
+    def retarget_label_references(self, t: Triple, new_triple: Triple, change_hint=None):
+        cnt = len(self.label_references[t])
+        for ref_t in self.label_references[t]:
+            val = get_triple_label_reference_value(ref_t, t)
+            val.value = new_triple
+            if change_hint:
+                CHANGE_HINTS[ref_t] = change_hint
+        del self.label_references[t]
+        return cnt
+
+    def get_unused_triples(self):
+        unused_triples = filter(lambda t: not does_triple_modify_state(t) and (t not in self.triple_references or len(self.triple_references[t]) == 0), self.trips)
+        return unused_triples
+
+    def get_unused_labels(self):
+        unused_triples = filter(lambda t: t.typ == TripleType.LABEL and (t not in self.label_references or len(self.label_references[t]) == 0), self.trips)
+        return unused_triples
+
+    def remove_triple(self, t: Triple, change_hint=None):
+        if t.l_val and t.l_val.typ == TripleValueType.TRIPLE_REF and t.l_val.value in self.triple_references:
+            self.triple_references[t.l_val.value].remove(t)
+        if t.r_val and t.r_val.typ == TripleValueType.TRIPLE_REF and t.r_val.value in self.triple_references:
+            self.triple_references[t.r_val.value].remove(t)
+        if t in self.triple_references:
+            del self.triple_references[t]
+        if t.l_val and t.l_val.typ == TripleValueType.TRIPLE_TARGET and t.l_val.value in self.label_references:
+            self.label_references[t.l_val.value].remove(t)
+        if t.r_val and t.r_val.typ == TripleValueType.TRIPLE_TARGET and t.r_val.value in self.label_references:
+            self.label_references[t.r_val.value].remove(t)
+        if t in self.label_references:
+            del self.label_references[t]
+        self.trips.remove(t)
+        if change_hint:
+            CHANGE_HINTS[t] = change_hint
+
+    def insert_triple(self, idx: int, t: Triple, change_hint=None):
+        if t.l_val and t.l_val.typ == TripleValueType.TRIPLE_REF and t.l_val.value in self.triple_references:
+            self.triple_references[t.l_val.value].append(t)
+        if t.r_val and t.r_val.typ == TripleValueType.TRIPLE_REF and t.r_val.value in self.triple_references:
+            self.triple_references[t.r_val.value].append(t)
+        if t.l_val and t.l_val.typ == TripleValueType.TRIPLE_TARGET and t.l_val.value in self.label_references:
+            self.label_references[t.l_val.value].append(t)
+        if t.r_val and t.r_val.typ == TripleValueType.TRIPLE_TARGET and t.r_val.value in self.label_references:
+            self.label_references[t.r_val.value].append(t)
+        self.trips.insert(idx, t)
+        if change_hint:
+            CHANGE_HINTS[t] = change_hint
+
+    def replace_triple(self, old_t: Triple, new_t: Triple, change_hint=None):
+        idx = self.trips.index(old_t)
+        self.remove_triple(old_t, change_hint)
+        self.insert_triple(idx, new_t, change_hint)
+
+    def does_triple_dominate(self, dom_trip: Triple, sub_trip: Triple):
+        if dom_trip not in self.dominance_map:
+            return False
+        dt = self.dominance_map[sub_trip]
+        while dt is not None:
+            if dt == dom_trip:
+                return True
+            dt = self.dominance_map[dt]
+        return False
+
+    def find_last_dominating_assign(self, start_trip: Triple, var:str):
+        t = self.dominance_map[start_trip]
+        while t is not None:
+            if t.typ == TripleType.ASSIGN and t.l_val.value == var:
+                return t
+            t = self.dominance_map[t]
+        return None
+
+    def find_assign_between(self, start: Triple, end: Triple, var: str):
+        for i in range(self.trips.index(start) + 1, self.trips.index(end)):
+            t = self.trips[i]
+            if t.typ == TripleType.ASSIGN and t.l_val.value == var:
+                return t
+        return None
+
+    def common_exp_match(self, tref: Triple):
+        ld = self.dominance_map[tref]
+        last_match = None
+        while ld is not None:
+            if triples_match(tref, ld):
+                last_match = ld
+            ld = self.dominance_map[ld]
+        if last_match is not None:
+            has_changed = False
+            if last_match.l_val:
+                if last_match.l_val.typ == TripleValueType.VAR_REF:
+                    if self.find_assign_between(last_match, tref, last_match.l_val.value) is not None:
+                        has_changed = True
+                elif last_match.l_val.typ in [TripleValueType.GLOBAL_REF,]:
+                    has_changed = True
+            if last_match.r_val:
+                if last_match.r_val.typ == TripleValueType.VAR_REF:
+                    if self.find_assign_between(last_match, tref, last_match.r_val.value) is not None:
+                        has_changed = True
+                elif last_match.r_val.typ in [TripleValueType.GLOBAL_REF,]:
+                    has_changed = True
+                
+            if not has_changed:
+                return last_match
+        return None
 
 # For common expressions
 def triples_match(t1: Triple, t2: Triple):
@@ -88,6 +234,16 @@ def null_operation_eval(trip: Triple):
                     if triple_values_equal(lv, rv):
                         return create_const_value(0)
     return None
+
+def eliminate_null_ops(opt_ctx: OptimizationContext):
+    did_modify = False
+    for t in opt_ctx.trips:
+        new_v = null_operation_eval(t)
+        if new_v is not None:
+            opt_ctx.retarget_triple_references(t, new_v, "Null-Op Retarget")
+            opt_ctx.remove_triple(t, "Null-Op")
+            did_modify = True
+    return did_modify
 
 def strength_reduce(triple: Triple):
     # TODO: Be able to change the number of triples (e.g. magic number division)
@@ -156,7 +312,17 @@ def strength_reduce(triple: Triple):
                             return True
 
     return False
-                    
+
+def do_strength_reduction(opt_ctx: OptimizationContext):
+    did_modify = False
+    did_pass_eval = True
+    while did_pass_eval:
+        did_pass_eval = False
+        for t in opt_ctx.trips:
+            did_pass_eval |= strength_reduce(t)
+        did_modify |= did_pass_eval
+    return did_modify
+
 def evaluate_triple_const(triple: Triple):
     match triple.typ:
         case TripleType.BINARY_OP:
@@ -210,105 +376,84 @@ def evaluate_triple_const(triple: Triple):
                         return None
     return None
 
-def const_eval_pass(triple_references: Dict[Triple, List[Triple]]):
+def const_eval_pass(opt_ctx: OptimizationContext):
     did_pass_evaluate = True
     did_modify = False
     while did_pass_evaluate:
         did_pass_evaluate = False
-        for t,v in list(triple_references.items()):
+        for t,v in list(opt_ctx.triple_references.items()):
             n = evaluate_triple_const(t)
             if n is not None:
-                did_pass_evaluate = True
-                for ref_t in v:
-                    val: TripleValue = get_triple_reference_value(ref_t, t)
-                    if val:
-                        assert val.typ == TripleValueType.TRIPLE_REF
-                        val.typ = TripleValueType.CONSTANT
-                        val.value = n
-                        CHANGE_HINTS[ref_t] = "Constant Propagation"
-                if len(v) > 0:
-                    did_modify = True
-                del triple_references[t]
+                new_tv = TripleValue(TripleValueType.CONSTANT, n)
+                # We take all references to this triple and point them at a constant
+                cnt = opt_ctx.retarget_triple_references(t, new_tv, "Constant Propagation")
+                did_pass_evaluate = cnt > 0
+                did_modify |= cnt > 0
 
     return did_modify
 
-def branch_const_eval_pass(triples: List[Triple], triple_references: Dict[Triple, List[Triple]]):
+def branch_const_eval_pass(opt_ctx: OptimizationContext):
     items_to_remove = []
-    for t in triples:
+    for t in opt_ctx.trips:
         if t.typ == TripleType.IF_COND and t.l_val.typ == TripleValueType.CONSTANT:
             n = t.l_val.value
             if t.op == Operator.NE:
                 if n == 0:
-                    t.typ = TripleType.GOTO
-                    t.l_val = t.r_val
-                    t.r_val = None
-                    CHANGE_HINTS[t] = "Branch constant eval"
+                    opt_ctx.replace_triple(t, Triple(TripleType.GOTO, None, t.r_val, None, uid=triple_uid()), "Branch Constant Evaluation")
                 else:
                     items_to_remove.append(t)
             elif t.op == Operator.EQ:
                 if n != 0:
-                    t.typ = TripleType.GOTO
-                    t.l_val = t.r_val
-                    t.r_val = None
-                    CHANGE_HINTS[t] = "Branch constant eval"
+                    opt_ctx.replace_triple(t, Triple(TripleType.GOTO, None, t.r_val, None, uid=triple_uid()), "Branch Constant Evaluation")
                 else:
                     items_to_remove.append(t)
             else:
                 assert False, f"Unknown Operator {t.op.name}"
     for t in items_to_remove:
-        triples.remove(t)
-        CHANGE_HINTS[t] = "Branch constant eval"
+        opt_ctx.remove_triple(t, "Branch Constant Evaluation")
+
     return len(items_to_remove) > 0
 
 def does_triple_modify_state(triple: Triple):
     return triple.typ != TripleType.BINARY_OP and triple.typ != TripleType.UNARY_OP and triple.typ != TripleType.NOP_REF
 
-def remove_unused_triples(trips: List[Triple], triple_references: Dict[Triple, List[Triple]]):
-    unused_triples = filter(lambda t: not does_triple_modify_state(t) and (t not in triple_references or len(triple_references[t]) == 0), trips)
-    did_remove = False
+def remove_unused_triples(opt_ctx: OptimizationContext):
+    unused_triples = opt_ctx.get_unused_triples()
+    did_change = False
     for t in unused_triples:
-        trips.remove(t)
-        CHANGE_HINTS[t] = "Unused"
-        did_remove = True
-        if t in triple_references:
-            del triple_references[t]
-    return did_remove
+        did_change = True
+        opt_ctx.remove_triple(t, "Unused")
 
-def forward_labels(trips: List[Triple], label_references: Dict[Triple, List[Triple]]):
+    return did_change
+
+def forward_labels(opt_ctx: OptimizationContext):
     did_forward = False
-    for t in list(label_references.keys()):
+    for t in list(opt_ctx.label_references.keys()):
         assert t.typ == TripleType.LABEL
-        original_index = trips.index(t)
+        original_index = opt_ctx.trips.index(t)
         assert original_index >= 0
         next_index = original_index
-        while next_index < len(trips) - 1 and trips[next_index + 1].typ == TripleType.LABEL:
+        while next_index < len(opt_ctx.trips) - 1 and opt_ctx.trips[next_index + 1].typ == TripleType.LABEL:
             next_index += 1
         if next_index > original_index:
-            forwarded_label = trips[next_index]
-            for ref_t in label_references[t]:
-                ref_val: TripleValue = get_triple_label_reference_value(ref_t, t)
-                assert ref_val is not None
-                ref_val.value = forwarded_label
-                CHANGE_HINTS[ref_t] = "Forwarded Label"
-            del label_references[t]
+            forwarded_label = opt_ctx.trips[next_index]
+            opt_ctx.retarget_label_references(t, forwarded_label, "Forwarded Label")
             did_forward = True
     return did_forward
 
-def remove_unused_labels(trips: List[Triple], label_references: Dict[Triple, List[Triple]]):
-    unused_triples = filter(lambda t: t.typ == TripleType.LABEL and (t not in label_references or len(label_references[t]) == 0), trips)
-    did_remove = False
+def remove_unused_labels(opt_ctx: OptimizationContext):
+    unused_triples = opt_ctx.get_unused_labels()
+    did_change = False
     for t in unused_triples:
-        trips.remove(t)
-        CHANGE_HINTS[t] = "Unused"
-        did_remove = True
-        if t in label_references:
-            del label_references[t]
-    return did_remove
+        did_change = True
+        opt_ctx.remove_triple(t, "Unused")
+    return did_change
 
-def remove_unreachable_triples(trips: List[Triple]):
+def remove_unreachable_triples(opt_ctx: OptimizationContext):
+    # TODO: Can this be moved to the block phase?
     is_unreachable = False
     trips_to_remove = []
-    for i, t in enumerate(trips):
+    for t in opt_ctx.trips:
         if t.typ == TripleType.LABEL:
             is_unreachable = False
         elif is_unreachable:
@@ -317,27 +462,25 @@ def remove_unreachable_triples(trips: List[Triple]):
             is_unreachable = True
     
     for t in trips_to_remove:
-        trips.remove(t)
-        CHANGE_HINTS[t] = "Unreachable"
+        opt_ctx.remove_triple(t, "Unreachable")
 
     return len(trips_to_remove) > 0
 
-def remove_pointless_goto(trips: List[Triple]):
+def remove_pointless_goto(opt_ctx: OptimizationContext):
     to_remove = []
-    for i, t in enumerate(trips):
-        if t.typ == TripleType.GOTO and i < len(trips) - 1:
-            next_trip = trips[i + 1]
+    for i, t in enumerate(opt_ctx.trips):
+        if t.typ == TripleType.GOTO and i < len(opt_ctx) - 1:
+            next_trip = opt_ctx.trips[i + 1]
             assert t.l_val.typ == TripleValueType.TRIPLE_TARGET
             if t.l_val.value == next_trip:
                 to_remove.append(t)
     for t in to_remove:
-        trips.remove(t)
-        CHANGE_HINTS[t] = "Useless GOTO"
+        opt_ctx.remove_triple(t, "Useless GOTO")
     return len(to_remove) > 0
 
-def simplify_binops(trips: List[Triple], triple_references: Dict[Triple, List[Triple]]):
+def simplify_binops(opt_ctx: OptimizationContext):
     to_remove = {}
-    for t in trips:
+    for t in opt_ctx.trips:
         match t.typ:
             case TripleType.BINARY_OP:
                 trefs = [v for v in (t.l_val, t.r_val) if v.typ == TripleValueType.TRIPLE_REF]
@@ -345,7 +488,7 @@ def simplify_binops(trips: List[Triple], triple_references: Dict[Triple, List[Tr
 
                 if len(trefs) == 1 and len(consts) == 1:
                     tref = trefs[0].value
-                    if len(triple_references[tref]) == 1 and triple_references[tref][0] == t:
+                    if len(opt_ctx.triple_references[tref]) == 1 and opt_ctx.triple_references[tref][0] == t:
                         if tref.typ == TripleType.BINARY_OP:
                             tref_consts = [v for v in (tref.l_val, tref.r_val) if v.typ == TripleValueType.CONSTANT]
                             if len(tref_consts) == 1:
@@ -372,12 +515,11 @@ def simplify_binops(trips: List[Triple], triple_references: Dict[Triple, List[Tr
                                                 to_remove[t] = tref
     
     for t,t2 in to_remove.items():
-        for t1 in triple_references[t]:
+        for t1 in opt_ctx.triple_references[t]:
             tv = get_triple_reference_value(t1, t)
             tv.value = t2
             CHANGE_HINTS[t1] = "Retarged to merge operation"
-        trips.remove(t)
-        CHANGE_HINTS[t] = "Merged operations"
+        opt_ctx.remove_triple(t, "Merged Operations")
     
     return len(to_remove) > 0
 
@@ -592,60 +734,29 @@ def create_dominance_map(blocks: List[TripleBlock]) -> Dict[Triple, Optional[Tri
                 block_queue.append(o_b)
     return dom_map
 
-def block_analysis(trips: List[Triple]):
-    blocks = build_control_flow(trips)
-    if len(blocks) == 0:
-        return False
-    for b in blocks:
-        evaluate_block_value_usage(b)
-    propagate_block_values(blocks)
-    
-    dominance_map: Dict[Triple, Triple] = create_dominance_map(blocks)
-
-    def does_triple_dominate(dom_trip: Triple, sub_trip: Triple):
-        assert dom_trip in dominance_map
-        dt = dominance_map[sub_trip]
-        while dt is not None:
-            if dt == dom_trip:
-                return True
-            dt = dominance_map[dt]
-        return False
-
-    def find_last_dominating_assign(start_trip: Triple, var: str):
-        t = dominance_map[start_trip]
-        while t is not None:
-            if t.typ == TripleType.ASSIGN and t.l_val.value == var:
-                return t
-            t = dominance_map[t]
-        return None
-
-    def find_assign_between(start: Triple, end: Triple, var: str):
-        for i in range(trips.index(start) + 1, trips.index(end)):
-            t = trips[i]
-            if t.typ == TripleType.ASSIGN and t.l_val.value == var:
-                return t
-        return None
+def block_analysis(opt_ctx: OptimizationContext):
+    opt_ctx.recalculate_blocks()
 
     did_change = False
 
-    for b in blocks:
+    for b in opt_ctx.blocks:
         for i,t in enumerate(b.trips):
             if OPTIMIZATION_FLAGS['value-forwarding']:
                 if t.l_val is not None and t.l_val.typ == TripleValueType.VAR_REF:
-                    assign_trip = find_last_dominating_assign(t, t.l_val.value)
+                    assign_trip = opt_ctx.find_last_dominating_assign(t, t.l_val.value)
                     if assign_trip and assign_trip.r_val.typ in [TripleValueType.CONSTANT, TripleValueType.VAR_REF]:
                         if assign_trip in b.trips or (len(b.in_blocks) == 1 and assign_trip in b.in_blocks[0].trips):
-                            if find_assign_between(assign_trip, t, t.l_val.value) is None:
-                                if assign_trip.r_val.typ == TripleValueType.CONSTANT or find_assign_between(assign_trip, t, assign_trip.r_val.value) is None:
+                            if opt_ctx.find_assign_between(assign_trip, t, t.l_val.value) is None:
+                                if assign_trip.r_val.typ == TripleValueType.CONSTANT or opt_ctx.find_assign_between(assign_trip, t, assign_trip.r_val.value) is None:
                                     t.l_val = assign_trip.r_val
                                     CHANGE_HINTS[t] = "Value forwarded"
                                     did_change = True
                 if t.r_val is not None and t.r_val.typ == TripleValueType.VAR_REF:
-                    assign_trip = find_last_dominating_assign(t, t.r_val.value)
+                    assign_trip = opt_ctx.find_last_dominating_assign(t, t.r_val.value)
                     if assign_trip and assign_trip.r_val.typ in [TripleValueType.CONSTANT, TripleValueType.VAR_REF]:
                         if assign_trip in b.trips or (len(b.in_blocks) == 1 and assign_trip in b.in_blocks[0].trips):
-                            if find_assign_between(assign_trip, t, t.r_val.value) is None:
-                                if assign_trip.r_val.typ == TripleValueType.CONSTANT or find_assign_between(assign_trip, t, assign_trip.r_val.value) is None:
+                            if opt_ctx.find_assign_between(assign_trip, t, t.r_val.value) is None:
+                                if assign_trip.r_val.typ == TripleValueType.CONSTANT or opt_ctx.find_assign_between(assign_trip, t, assign_trip.r_val.value) is None:
                                     t.r_val = assign_trip.r_val
                                     CHANGE_HINTS[t] = "Value forwarded"
                                     did_change = True
@@ -666,12 +777,10 @@ def block_analysis(trips: List[Triple]):
                 variable = t.l_val.value
                 var_ref = create_var_ref_value(variable)
                 if var_ref in b.vals_assigned and b.vals_assigned[var_ref].index > t.index:
-                    trips.remove(t)
-                    CHANGE_HINTS[t] = "Assignment without use"
+                    opt_ctx.remove_triple(t, "Assignment without use")
                     did_change = True
                 elif var_ref not in b.out_vals and all([not triple_references_var(t1, variable) for t1 in b.trips[i + 1:]]):
-                    trips.remove(t)
-                    CHANGE_HINTS[t] = "Assignment without use"
+                    opt_ctx.remove_triple(t, "Assignment without use")
                     did_change = True
             if not did_change and OPTIMIZATION_FLAGS['common-exp']:
                 # TODO: create a table for faster common exp lookups
@@ -679,43 +788,22 @@ def block_analysis(trips: List[Triple]):
                 rv = t.r_val
                 lref = lv.value if lv and lv.typ == TripleValueType.TRIPLE_REF else None
                 rref = rv.value if rv and rv.typ == TripleValueType.TRIPLE_REF else None
-                def common_exp_match(tref: Triple, tv: TripleValue):
+                def common_exp_retarget(t: Triple, tv: TripleValue):
                     nonlocal did_change
-                    if not does_triple_modify_state(tref):
-                        ld = dominance_map[tref]
-                        last_match = None
-                        while ld is not None:
-                            if triples_match(tref, ld):
-                                # triple matched
-                                last_match = ld
-                            ld = dominance_map[ld]
-                        if last_match is not None:
-                            has_changed = False
-                            if last_match.l_val:
-                                if last_match.l_val.typ == TripleValueType.VAR_REF:
-                                    if find_assign_between(last_match, tref, last_match.l_val.value) is not None:
-                                        has_changed = True
-                                elif last_match.l_val.typ in [TripleValueType.GLOBAL_REF,]:
-                                    has_changed = True
-                            if last_match.r_val:
-                                if last_match.r_val.typ == TripleValueType.VAR_REF:
-                                    if find_assign_between(last_match, tref, last_match.r_val.value) is not None:
-                                        has_changed = True
-                                elif last_match.r_val.typ in [TripleValueType.GLOBAL_REF,]:
-                                    has_changed = True
-                                
-                            if not has_changed:
-                                tv.value = last_match
-                                CHANGE_HINTS[t] = "Common expression"
-                                did_change = True
+                    if not does_triple_modify_state(t):
+                        match = opt_ctx.common_exp_match(t)
+                        if match:
+                            tv.value = match
+                            CHANGE_HINTS[t] = "Common Expression"
+                            did_change = True
                 if lref is not None:
-                    common_exp_match(lref, lv)
+                    common_exp_retarget(lref, lv)
                 if rref is not None:
-                    common_exp_match(rref, rv)
+                    common_exp_retarget(rref, rv)
     
     if not did_change:
         if OPTIMIZATION_FLAGS["loop-optimization"]:
-            did_change |= identify_loops(trips, blocks)
+            did_change |= identify_loops(opt_ctx)
         
     return did_change
 
@@ -923,20 +1011,25 @@ def optimize_triples(trip_ctx: FunctionTripleContext):
 
     tripopt_file = os.path.join(belfast_data.COMPILER_SETTINGS.tripopt_dir, f"{trip_ctx.ctx_name}_tripopt.tripstr")
 
+    index_triples(trips)
+    opt_ctx = OptimizationContext(trips)
+    opt_ctx.evaluate_triple_references()
+    opt_ctx.evaluate_label_references()
+
     if belfast_data.COMPILER_SETTINGS.generate_tripstr and belfast_data.COMPILER_SETTINGS.generate_diff:
         with open(tripopt_file, 'w') as f:
             for t in trips:
                 f.write(f"{print_triple(t)}\n")
             f.write("\n")
 
+    passes = 0
+
     while did_modify:
+        passes += 1
         did_modify = False
-        index_triples(trips)
-        triple_references = get_reference_data(trips)
-        label_references: Dict[Triple, List[Triple]] = {}
-        for t in filter(lambda x: x.typ == TripleType.LABEL, trips):
-            label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, trips))
-        CHANGE_HINTS.clear()
+        opt_ctx.evaluate_triple_references()
+        opt_ctx.evaluate_label_references()
+        
         if belfast_data.COMPILER_SETTINGS.generate_diff:
             if belfast_data.COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
                 d = get_triple_delta2(prev_trips, trips)
@@ -947,51 +1040,34 @@ def optimize_triples(trip_ctx: FunctionTripleContext):
                     f.write("\n")
 
             prev_trips = deepcopy_trips(trips)
+        CHANGE_HINTS.clear()
 
         if OPTIMIZATION_FLAGS["const-eval"]:
-            did_modify |= const_eval_pass(triple_references)
-            did_modify |= branch_const_eval_pass(trips, triple_references)
+            did_modify |= const_eval_pass(opt_ctx)
+            did_modify |= branch_const_eval_pass(opt_ctx)
         
         if OPTIMIZATION_FLAGS["value-simplification"]:
-            did_modify |= simplify_binops(trips, triple_references)
+            did_modify |= simplify_binops(opt_ctx)
 
         if OPTIMIZATION_FLAGS["unused-code"]:
-            did_modify |= remove_unused_triples(trips, triple_references)
-            did_modify |= remove_unreachable_triples(trips)
+            did_modify |= remove_unused_triples(opt_ctx)
+            did_modify |= remove_unreachable_triples(opt_ctx)
 
         if OPTIMIZATION_FLAGS['null-op']:
-            for t in trips:
-                new_v = null_operation_eval(t)
-                if new_v is not None:
-                    if t in triple_references:
-                        for ref_t in triple_references[t]:
-                            val: TripleValue = get_triple_reference_value(ref_t, t)
-                            if val == ref_t.l_val:
-                                ref_t.l_val = new_v
-                            elif val == ref_t.r_val:
-                                ref_t.r_val = new_v
-                    trips.remove(t)
-                    CHANGE_HINTS[t] = "Null-Op"
-                    did_modify = True
-                
+            did_modify |= eliminate_null_ops(opt_ctx)  
 
         if OPTIMIZATION_FLAGS['strength-reduce']:
-            did_pass_evaluate = True
-            while did_pass_evaluate:
-                did_pass_evaluate = False
-                for t in trips:
-                    did_modify |= strength_reduce(t)
+            did_modify |= do_strength_reduction(opt_ctx)
 
-        did_modify |= remove_pointless_goto(trips)
+        did_modify |= remove_pointless_goto(opt_ctx)
 
-        label_references = {}
-        for t in filter(lambda x: x.typ == TripleType.LABEL, trips):
-            label_references[t] = list(filter(lambda x: get_triple_label_reference_value(x, t) is not None, trips))
-
-        did_modify |= forward_labels(trips, label_references)
-        did_modify |= remove_unused_labels(trips, label_references)
+        did_modify |= forward_labels(opt_ctx)
+        did_modify |= remove_unused_labels(opt_ctx)
 
         if not did_modify:
-            did_modify |= block_analysis(trips)
+            did_modify |= block_analysis(opt_ctx)
+
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[INFO] Optimization passes: {passes}")
 
     return trips
