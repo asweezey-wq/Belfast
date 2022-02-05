@@ -1,4 +1,4 @@
-include "stdlib.bl"
+include stdlib
 
 const bufsize = 32
 
@@ -23,5 +23,5 @@ fun main do
         bytes_read = read_until(fd, '\n', cbuf, bufsize)
         nums_read = nums_read + 1
     end
-    putd(cnt)
+    putu(cnt)
 end

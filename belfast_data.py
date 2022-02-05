@@ -430,6 +430,28 @@ class Triple:
     def __repr__(self) -> str:
         return f"{str(self.index) + ': ' if self.index >= 0 else ''}" + f"{self.typ.name} " + (f"{self.op.name} " if self.op is not None else "") + f"{str(self.l_val) if self.l_val is not None else ''} {str(self.r_val if self.r_val is not None else '')}"
 
+
+@dataclass
+class TripleBlock:
+    index: int
+    trips: List[Triple]
+    in_blocks: List['TripleBlock']
+    out_blocks: List['TripleBlock']
+    vals_assigned: Dict[TripleValue, Triple]
+    vals_used: Dict[TripleValue, Triple]
+    in_vals: Set[TripleValue]
+    out_vals: Set[TripleValue]
+
+    def __hash__(self) -> int:
+        return self.index
+
+    def __eq__(self, __o: object) -> bool:
+        return isinstance(__o, TripleBlock) and self.index == __o.index
+
+    def __repr__(self) -> str:
+        return f"Block {self.index}: {self.trips[0].index}-{self.trips[-1].index}"
+
+
 RDI_INDEX = 6
 RAX_INDEX = 1
 RCX_INDEX = 3
@@ -697,3 +719,34 @@ class ParseContext:
     def include_module(self, m: Module):
         self.included_modules[m.name] = m
         self.include_parse_context(m.parse_ctx)
+
+
+class LinearCombination:
+
+    def __init__(self, linear_var: TripleValue) -> None:
+        self.linear_var = linear_var
+        self.operations : List[Tuple[bool, TripleValue]] = []
+        self.coefficient_val : TripleValue = None
+        self.negate : bool = False
+
+    def add_coefficient(self, tv: TripleValue):
+        if self.coefficient_val or len(self.operations):
+            return None 
+        new_l = LinearCombination(self.linear_var)
+        new_l.coefficient_val = tv
+        new_l.negate = self.negate
+        return new_l
+
+    def add_operation(self, op: Operator, tv: TripleValue):
+        new_l = LinearCombination(self.linear_var)
+        new_l.coefficient_val = self.coefficient_val
+        new_l.negate = self.negate
+        new_l.operations = self.operations + [(op == Operator.PLUS, tv)]
+        return new_l
+
+    def do_negate(self):
+        new_l = LinearCombination(self.linear_var)
+        new_l.coefficient_val = self.coefficient_val
+        new_l.negate = not self.negate
+        new_l.operations = [(not i,j) for i,j in self.operations]
+        return new_l
