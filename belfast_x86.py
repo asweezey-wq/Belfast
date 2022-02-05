@@ -37,6 +37,7 @@ def get_forced_input_registers(triple: Triple):
 
 def insert_x86_regmoves(trips: List[Triple]):
     new_trips: List[Triple] = []
+    trip_refs = get_reference_data(trips)
     for t in trips:
         if t.typ == TripleType.BINARY_OP:
             if t.op == Operator.DIVIDE or t.op == Operator.MODULUS or t.op == Operator.MULTIPLY:
@@ -48,6 +49,12 @@ def insert_x86_regmoves(trips: List[Triple]):
                     t.r_val = TripleValue(TripleValueType.TRIPLE_REF, new_trips[-1])
                 new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RDX_INDEX), TripleValue(TripleValueType.CONSTANT, 0), uid=triple_uid()))
                 new_trips.append(t)
+                if t in trip_refs:
+                    ref_triple = Triple(TripleType.NOP_REF, None, create_tref_value(t), None, flags=TF_DONT_FORWARD, uid=triple_uid())
+                    new_trips.append(ref_triple)
+                    for ref_t in trip_refs[t]:
+                        val = get_triple_reference_value(ref_t, t)
+                        val.value = ref_triple
                 if t.op == Operator.DIVIDE or t.op == Operator.MULTIPLY:
                     new_trips.append(Triple(TripleType.REGMOVE, None, TripleValue(TripleValueType.REGISTER, RDX_INDEX), TripleValue(TripleValueType.UNKNOWN, 0), uid=triple_uid()))
                 elif t.op == Operator.MODULUS:
@@ -950,7 +957,8 @@ def get_asm_footer(trip_ctx: TripleContext):
             asm += f"{labl}: db `{s.encode('unicode_escape').decode('utf-8')}`, 0\n"
 
     called_funs = set()
-    for f_name, f_ctx in trip_ctx.functions.items():
+    for f_name in trip_ctx.parsectx.fun_signatures:
+        f_ctx = trip_ctx.get_function(f_name)
         for t in f_ctx.triples:
             if t.typ == TripleType.CALL:
                 called_funs.add(t.l_val.value)
