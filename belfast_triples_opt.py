@@ -5,8 +5,6 @@ from typing import *
 from math import log2
 import os
 
-CHANGE_HINTS = {}
-
 from belfast_variable_analysis import identify_loops, optimize_loop
 
 OPTIMIZATION_FLAGS_DEFAULTS = {
@@ -665,80 +663,6 @@ def create_dominance_map(blocks: List[TripleBlock]) -> Dict[Triple, Optional[Tri
                 block_queue.append(o_b)
     return dom_map
 
-def block_analysis(opt_ctx: OptimizationContext):
-    opt_ctx.recalculate_blocks()
-
-    did_change = False
-
-    for b in opt_ctx.blocks:
-        for i,t in enumerate(b.trips):
-            if OPTIMIZATION_FLAGS['value-forwarding']:
-                if t.l_val is not None and t.l_val.typ == TripleValueType.VAR_REF:
-                    assign_trip = opt_ctx.find_last_dominating_assign(t, t.l_val.value)
-                    if assign_trip and assign_trip.r_val.typ in [TripleValueType.CONSTANT, TripleValueType.VAR_REF]:
-                        if assign_trip in b.trips or (len(b.in_blocks) == 1 and assign_trip in b.in_blocks[0].trips):
-                            if opt_ctx.find_assign_between(assign_trip, t, t.l_val.value) is None:
-                                if assign_trip.r_val.typ == TripleValueType.CONSTANT or opt_ctx.find_assign_between(assign_trip, t, assign_trip.r_val.value) is None:
-                                    t.l_val = assign_trip.r_val
-                                    CHANGE_HINTS[t] = "Value forwarded"
-                                    did_change = True
-                if t.r_val is not None and t.r_val.typ == TripleValueType.VAR_REF:
-                    assign_trip = opt_ctx.find_last_dominating_assign(t, t.r_val.value)
-                    if assign_trip and assign_trip.r_val.typ in [TripleValueType.CONSTANT, TripleValueType.VAR_REF]:
-                        if assign_trip in b.trips or (len(b.in_blocks) == 1 and assign_trip in b.in_blocks[0].trips):
-                            if opt_ctx.find_assign_between(assign_trip, t, t.r_val.value) is None:
-                                if assign_trip.r_val.typ == TripleValueType.CONSTANT or opt_ctx.find_assign_between(assign_trip, t, assign_trip.r_val.value) is None:
-                                    t.r_val = assign_trip.r_val
-                                    CHANGE_HINTS[t] = "Value forwarded"
-                                    did_change = True
-                if t.l_val is not None and t.l_val.typ == TripleValueType.TRIPLE_REF:
-                    l_trip = t.l_val.value
-                    if l_trip.typ == TripleType.NOP_REF and (l_trip.flags & TF_DONT_FORWARD) == 0:
-                        t.l_val = l_trip.l_val
-                        CHANGE_HINTS[t] = "Value forwarded"
-                        did_change = True
-                if t.r_val is not None and t.r_val.typ == TripleValueType.TRIPLE_REF:
-                    r_trip = t.r_val.value
-                    if r_trip.typ == TripleType.NOP_REF and (r_trip.flags & TF_DONT_FORWARD) == 0:
-                        t.r_val = r_trip.l_val
-                        CHANGE_HINTS[t] = "Value forwarded"
-                        did_change = True
-            if t.typ == TripleType.ASSIGN and OPTIMIZATION_FLAGS['unused-code']:
-                assert t.l_val.typ == TripleValueType.VAR_ASSIGN
-                variable = t.l_val.value
-                var_ref = create_var_ref_value(variable)
-                if var_ref in b.vals_assigned and b.vals_assigned[var_ref].index > t.index:
-                    opt_ctx.remove_triple(t, "Assignment without use")
-                    did_change = True
-                elif var_ref not in b.out_vals and all([not triple_references_var(t1, variable) for t1 in b.trips[i + 1:]]):
-                    opt_ctx.remove_triple(t, "Assignment without use")
-                    did_change = True
-            if not did_change and OPTIMIZATION_FLAGS['common-exp']:
-                # TODO: create a table for faster common exp lookups
-                lv = t.l_val
-                rv = t.r_val
-                lref = lv.value if lv and lv.typ == TripleValueType.TRIPLE_REF else None
-                rref = rv.value if rv and rv.typ == TripleValueType.TRIPLE_REF else None
-                def common_exp_retarget(t: Triple, tv: TripleValue):
-                    nonlocal did_change
-                    if not does_triple_modify_state(t):
-                        match = opt_ctx.common_exp_match(t)
-                        if match:
-                            tv.value = match
-                            CHANGE_HINTS[t] = "Common Expression"
-                            did_change = True
-                if lref is not None:
-                    common_exp_retarget(lref, lv)
-                if rref is not None:
-                    common_exp_retarget(rref, rv)
-    
-    if not did_change:
-        if OPTIMIZATION_FLAGS["loop-optimization"]:
-            did_change |= identify_loops(opt_ctx)
-        
-    return did_change
-    f.write("\n")
-
 def output_triple_delta_to_file(d, filename):
     with open(filename, 'a') as f:
         at, ct, rt = d
@@ -934,6 +858,9 @@ def optimize_by_block(opt_ctx: OptimizationContext):
     if OPTIMIZATION_FLAGS["unused-code"]:
         remove_unused_triples(opt_ctx)
 
+    if len(opt_ctx.trips) == 0:
+        return
+
     opt_ctx.recalculate_blocks()
 
     for b in opt_ctx.blocks:
@@ -995,6 +922,8 @@ def optimize_triples(trip_ctx: FunctionTripleContext):
     while True:
         passes += 1
         opt_ctx.triples_dirty = False
+        if len(opt_ctx.trips) == 0:
+            break
         optimize_by_block(opt_ctx)
 
         if not opt_ctx.triples_dirty:

@@ -1,6 +1,5 @@
 from belfast_data import *
-from belfast_triples import print_triple
-from belfast_triples_opt import *
+from belfast_triples import *
 from typing import *
 
 def color_interf_graph_simplicial(interf_graph: Dict[Any, List[Any]], coalesce_edges: Dict[Any, List[Any]], precolored_nodes: Dict[Any, int], k: int) -> Dict[Any, int]:
@@ -290,7 +289,7 @@ def get_uses(triple: Triple, colored_only=True):
         return tuple(new_vals)
     return ()
 
-def identify_loops(opt_ctx: 'OptimizationContext') -> bool:
+def identify_loops(opt_ctx) -> bool:
     did_change = False
     block_visit = {}
     dom_map = {}
@@ -349,7 +348,7 @@ def identify_loops(opt_ctx: 'OptimizationContext') -> bool:
         overlapping_loops = [(b3,b4) for b3,b4 in loops.items() if b3.index < b1.index and b4.index >= b2.index]
         opt_ctx.loop_prio[b1] = len(overlapping_loops)
     
-def optimize_loop(header: TripleBlock, end: TripleBlock, opt_ctx: 'OptimizationContext'):
+def optimize_loop(header: TripleBlock, end: TripleBlock, opt_ctx):
     blocks_in = [b for b in opt_ctx.blocks if header.index <= b.index <= end.index]
     
     loop_defines = {}

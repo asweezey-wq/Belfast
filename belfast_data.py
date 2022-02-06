@@ -640,6 +640,9 @@ class FunctionSignature:
     arg_names: Tuple
     flags: int
 
+
+CHANGE_HINTS = {}
+
 class Module:
 
     def __init__(self, name, src_file) -> None:
