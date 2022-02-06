@@ -374,17 +374,17 @@ With these functions, the programmer can layout the memory neatly yet still have
 ### Including other Belfast Files
 ***
 
-We can include other Belfast files using `include`
+We can include other Belfast modules using `include`
 ```
-include "stdlib.bl"
+include stdlib
 ```
-
-This will prepend the current file with any definitions from `stdlib.bl`. `include` will include
+The compiler will search through the included modules paths (which is, by default, only the current directory, but more can be added with the `-I` argument) to find the specified module, which is just a belfast file `<module name>.bl`. This will provide the current Belfast program with references to various components of the included module:
 - Function definitions
 - `const` declarations
-- includes from the included file (will add flags to fix this)
 - `struct` declarations
 - `global` declarations
+
+These will not, however, be included in the final object file. This means that when you include a module, you must also link the generated object file with the module object file in order for references to this module to work. 
 
 ### Globals
 ***
@@ -422,18 +422,23 @@ ld -lSystem prog.o -o prog
 
 - `-o [output file]` - Specify the file to output the generated assembly to
 - `-v` - Verbose mode
-- `-r` - Assemble, link, and run after compilation. This will generate `prog.asm`, `a.out.o`, and `a.out`
-- `-c` - Include comments in the assembly, which associate generated x86 instructions with their IR instruction (for debugging)
+- `-S` - Generate assembly
+- `-L` - Link the generated object file with the provided included libraries, and stores the executable in `a.out`
+- `-r` - Assemble, link, and run after compilation. This will generate extra files for the object and executable
+- `-I [path]` - Adds a file path to the include path list. When including modules, the compiler searches through the list of included directories to find the module
+- `--comment` - Include comments in the assembly, which associate generated x86 instructions with their IR instruction (for debugging)
 - `-nc` - Prevents the compiler from evaluating constant expressions at compile time (for debugging)
 - `-s` - Provides code metrics for efficiency of generated x86 (for debugging)
-- `-ir` - Stops the compiler from generating the assembly, it will only output the IR files
+- `--ir` - Tells the compiler to store the generated IR files at the specified file.
 - `-d` - Generate .tripopt files, which show the IR differences throughout the optimization phase
 
 **Generated Files**
 
-By default, the compiler will output to `prog.asm` if it is not given an output file.
+By default, the compiler will output to `a.out` if it is not given an output file.
 
-The compiler will also generate `prog.tripstr`, which shows the IR of the program, and `prog.tripstr.x86`, which shows the IR of the program once it has been converted to x86 and registers have been allocated, etc.
+The compiler's default mode is object generation. It will generate assembly, then use `nasm` to generate an object file, which can then be linked with included libraries to generate the final executable. Use the `-S` to save assembly to the specified output file. 
+
+If the `--ir` option is used, the compiler will also generate `prog.tripstr`, which shows the IR of the program, and `prog.tripstr.x86`, which shows the IR of the program once it has been converted to x86 and registers have been allocated, etc.
 
 If `-d` is used, the compiler will generate `..._tripopt.tripstr` files for each function (e.g. `main` would be `main_tripopt.tripstr`) in the `./tripstr/` directory. These show the IR of the given function after each optimization pass, with a diff to show what was added/removed and why
 
