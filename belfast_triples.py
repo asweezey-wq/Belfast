@@ -524,3 +524,60 @@ def get_triple_referenced_values(triple: Triple):
                 vals.add(create_register_value(RAX_INDEX))
                 vals.add(create_register_value(RDX_INDEX))
     return vals
+
+
+def does_value_need_color(tv: TripleValue):
+    return tv.typ in [TripleValueType.REGISTER, TripleValueType.VAR_REF, TripleValueType.TRIPLE_REF, TripleValueType.ADDRESS_COMPUTE]
+
+def get_defines(triple: Triple):
+    match triple.typ:
+        case TripleType.ASSIGN | TripleType.FUN_ARG_IN:
+            return (create_var_ref_value(triple.l_val.value),)
+        case TripleType.REGMOVE:
+            return (triple.l_val,)
+        case TripleType.BINARY_OP | TripleType.UNARY_OP | TripleType.NOP_REF | TripleType.LOAD:
+            if (triple.flags & TF_BOOL_FORWARDED) > 0:
+                # Bool forwarded values are not stored
+                return ()
+            return (create_tref_value(triple),)
+        case TripleType.CALL | TripleType.SYSCALL:
+            return [create_tref_value(triple),] + [create_register_value(i) for i in CALLER_SAVED_REG]
+        case TripleType.ARG:
+            return (create_register_value(SYSCALL_ARG_REGISTERS[triple.data] if triple.flags & TF_SYSCALL else ARG_REGISTERS[triple.data]),)
+    return ()
+
+def get_uses(triple: Triple, colored_only=True):
+    vals = []
+    match triple.typ:
+        case TripleType.ASSIGN | TripleType.REGMOVE:
+            if not colored_only or does_value_need_color(triple.r_val):
+                vals = [triple.r_val,]
+        case TripleType.BINARY_OP | TripleType.STORE:
+            vals = []
+            if not colored_only or does_value_need_color(triple.r_val):
+                vals.append(triple.r_val)
+            if not colored_only or does_value_need_color(triple.l_val):
+                vals.append(triple.l_val)
+            if triple.typ == TripleType.BINARY_OP and triple.op in [Operator.DIVIDE, Operator.MODULUS, Operator.MULTIPLY]:
+                vals.append(create_register_value(RDX_INDEX))
+        case TripleType.UNARY_OP | TripleType.IF_COND | TripleType.NOP_USE | TripleType.NOP_REF | TripleType.LOAD | TripleType.ARG | TripleType.RETURN:
+            if triple.typ == TripleType.IF_COND and triple.l_val.typ == TripleValueType.TRIPLE_REF and (triple.l_val.value.flags & TF_BOOL_FORWARDED) > 0:
+                return ()
+            if not colored_only or does_value_need_color(triple.l_val):
+                vals = [triple.l_val,]
+        case TripleType.SYSCALL | TripleType.CALL:
+            vals = [create_register_value(v) for v in ARG_REGISTERS[:triple.data]]
+        case TripleType.RETURN:
+            vals = [create_register_value(v) for v in CALLEE_SAVED_REG]
+    new_vals = []
+    for v in vals:
+        if v.typ == TripleValueType.ADDRESS_COMPUTE:
+            if does_value_need_color(v.value[0]):
+                new_vals.append(v.value[0])
+            if does_value_need_color(v.value[1]):
+                new_vals.append(v.value[1])
+        else:
+            new_vals.append(v)
+    if len(new_vals) > 0:
+        return tuple(new_vals)
+    return ()

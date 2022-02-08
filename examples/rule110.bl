@@ -18,11 +18,10 @@ fun main do
     while i < ITERS do
         var j = 0;
         while j < ITERS do
-            var temp; temp = print_buf + j
             if load8(base_buf + j) then
-                store8(temp, '*')
+                store8(print_buf + j, '*')
             else
-                store8(temp, ' ')
+                store8(print_buf + j, ' ')
             end
             j = j + 1
         end

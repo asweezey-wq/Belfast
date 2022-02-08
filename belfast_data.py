@@ -431,6 +431,26 @@ class Triple:
         return f"{str(self.index) + ': ' if self.index >= 0 else ''}" + f"{self.typ.name} " + (f"{self.op.name} " if self.op is not None else "") + f"{str(self.l_val) if self.l_val is not None else ''} {str(self.r_val if self.r_val is not None else '')}"
 
 
+@dataclass(frozen=True, eq=True)
+class Expression:
+    typ:TripleType
+    op:Optional[Union[Operator, Keyword]]
+    l_val:Optional[TripleValue]
+    r_val:Optional[TripleValue]
+    size:int = 64
+
+    def __repr__(self) -> str:
+        return f"{self.typ.name} " + (f"{self.op.name} " if self.op is not None else "") + f"{str(self.l_val) if self.l_val is not None else ''} {str(self.r_val if self.r_val is not None else '')}"
+
+def triple_to_exp(t: Triple) -> Expression:
+    return Expression(t.typ, t.op, t.l_val, t.r_val, size=t.size)
+
+def triple_matches_exp(t: Triple, exp: Expression) -> bool:
+    return t.typ == exp.typ and t.op == exp.op and ((t.l_val is None) == (exp.l_val is None)) and ((t.r_val is None) == (exp.r_val is None)) and (t.l_val is None or triple_values_equal(t.l_val, exp.l_val)) and (t.r_val is None or triple_values_equal(t.r_val, exp.r_val))
+
+def exp_to_triple(e: Expression) -> Triple:
+    return Triple(e.typ, e.op, e.l_val, e.r_val, size=e.size, uid=triple_uid())
+
 @dataclass
 class TripleBlock:
     index: int

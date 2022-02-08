@@ -799,6 +799,9 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Contex
                         op = INVERT_CMP_OP[lv.value.op] if t.op == Operator.NE else lv.value.op
                         write_asm(f"j{CMP_OP_INSTR_MAP[op]} {triple_value_str(rv, trip_ctx)}")
                     else:
+                        if lv.typ == TripleValueType.ON_STACK:
+                            write_asm(move_instr(trip_ctx.memory_spill_register, lv, trip_ctx))
+                            lv = create_register_value(trip_ctx.memory_spill_register)
                         assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
                         code_stats.basic_ops += 1
                         write_asm(f"cmp {triple_value_str(lv, trip_ctx)}, 0")

@@ -17,6 +17,7 @@ OPTIMIZATION_FLAGS_DEFAULTS = {
     'null-op': True,
     "loop-optimization": True,
     'value-simplification': True,
+    'code-hoisting': True,
 }
 
 OPTIMIZATION_FLAGS = dict(OPTIMIZATION_FLAGS_DEFAULTS)
@@ -46,6 +47,7 @@ class OptimizationContext:
         for b in self.blocks:
             evaluate_block_value_usage(b)
         propagate_block_values(self.blocks)
+        calc_block_dominance(self)
         self.dominance_map = create_dominance_map(self.blocks)
 
     def evaluate_triple_references(self):
@@ -611,6 +613,206 @@ def propagate_block_values(blocks: List[TripleBlock]):
             if in1 != b.in_vals or out1 != b.out_vals:
                 changed = True
 
+def calc_block_dominance(opt_ctx: OptimizationContext):
+    block_visit = {}
+    dom_map = {}
+    blocks = opt_ctx.blocks
+    if len(blocks) == 0:
+        return False
+    trips = opt_ctx.trips
+    open_block_set = [blocks[0]]
+    while len(open_block_set) > 0:
+        b = open_block_set.pop(0)
+        block_visit[b] = set([b])
+        for i in b.in_blocks:
+            if i in block_visit:
+                block_visit[b].update(block_visit[i])
+        temp = None
+        if len(b.in_blocks) > 0:
+            for in_b in b.in_blocks:
+                if in_b not in block_visit:
+                    continue
+                if temp is None:
+                    temp = block_visit[in_b]
+                else:
+                    temp = temp.intersection(block_visit[in_b])
+            max_block = sorted(list(temp), key= lambda x: x.index)[-1]
+            dom_map[b] = max_block
+        else:
+            dom_map[b] = None
+        for o_b in b.out_blocks:
+            if o_b not in open_block_set and o_b not in dom_map:
+                open_block_set.append(o_b)
+
+    opt_ctx.block_dominance_map = dom_map
+    opt_ctx.block_visit_in = block_visit
+
+def does_triple_kill_expression(t: Triple, exp: Expression):
+    d = get_defines(t)
+    return exp.l_val in d or exp.r_val in d
+
+def does_triple_use_expression(t: Triple, exp: Expression):
+    u = get_uses(t)
+    return any([i.typ == TripleValueType.TRIPLE_REF and triple_matches_exp(i.value, exp) for i in u])
+
+def triple_uses_expressions(t: Triple):
+    exp = []
+    if t.l_val and t.l_val.typ == TripleValueType.TRIPLE_REF and t.l_val.value.typ == TripleType.BINARY_OP:
+        exp.append(triple_to_exp(t.l_val.value))
+    if t.r_val and t.r_val.typ == TripleValueType.TRIPLE_REF and t.r_val.value.typ == TripleType.BINARY_OP:
+        exp.append(triple_to_exp(t.r_val.value))
+    return exp
+
+def triple_generates_expressions(t: Triple):
+    if t.typ == TripleType.BINARY_OP:
+        return [triple_to_exp(t)]
+    return []
+
+def expression_analysis(opt_ctx: OptimizationContext):
+    # Code hoisting
+    blocks = opt_ctx.blocks
+
+    temp_blocks = []
+    # Transform blocks
+    for b in list(blocks):
+        if len(b.out_blocks) == 2:
+            new_b = TripleBlock(len(blocks), [b.trips[-1]], [], [], {}, {}, b.in_vals, b.out_vals)
+            new_b.out_blocks = b.out_blocks
+            b.out_blocks = [new_b]
+            for child in new_b.out_blocks:
+                child.in_blocks.remove(b)
+                child.in_blocks.append(new_b)
+            new_b.in_blocks = [b]
+            b.trips.pop(-1)
+            blocks.insert(blocks.index(b) + 1, new_b)
+            temp_blocks.append(new_b)
+
+    anticipated = {}
+    block_kills = {}
+    block_gens = {}
+
+    changed = True
+    while changed:
+        changed = False
+        for b in reversed(blocks):
+            orig = set(anticipated[b]) if b in anticipated else None
+            in_next = set()
+            if len(b.out_blocks) > 0:
+                in_next = None
+                for ob in b.out_blocks:
+                    if ob in anticipated and blocks.index(ob) > blocks.index(b):
+                        in_next = in_next.intersection(anticipated[ob]) if in_next else anticipated[ob]
+                if not in_next:
+                    in_next = set()
+            used = {}
+            killed_e = set()
+            block_kills[b] = set()
+            for i,t in enumerate(b.trips):
+                el = triple_uses_expressions(t)
+                for e in el:
+                    if e not in used:
+                        used[e] = i
+            for i,t in enumerate(b.trips):
+                for e in in_next:
+                    if does_triple_kill_expression(t, e):
+                        killed_e.add(e)
+                k = []
+                for e,j in used.items():
+                    if i < j and does_triple_kill_expression(t, e):
+                        k.append(e)
+                        block_kills[b].add(e)
+                for e in k:
+                    del used[e]
+            block_kills[b].update(killed_e)
+            anticipated[b] = in_next.difference(killed_e).union(used.keys())
+            if orig is None or anticipated[b] != orig:
+                changed = True
+
+    available_in = {}
+    available_out = {}
+
+    changed = True
+    while changed:
+        changed = False
+        for b in blocks:
+            orig = set(available_out[b]) if b in available_out else None
+            in_exps = set()
+            if len(b.in_blocks) > 0:
+                in_exps = None
+                for ib in b.in_blocks:
+                    if ib in available_out:
+                        in_exps = in_exps.intersection(available_out[ib]) if in_exps else available_out[ib]
+                if not in_exps:
+                    in_exps = set()
+            available_in[b] = in_exps
+            varkill = set()
+            dexpr = set()
+            for t in reversed(b.trips):
+                if t.typ == TripleType.ASSIGN:
+                    varkill.add(create_var_ref_value(t.l_val.value))
+                elif t.typ == TripleType.BINARY_OP:
+                    e = triple_to_exp(t)
+                    if e.l_val not in varkill and e.r_val not in varkill:
+                        dexpr.add(e)
+            ekill = set()
+            for e in dexpr:
+                if e.l_val in varkill or e.r_val in varkill:
+                    ekill.add(e)
+            block_gens[b] = dexpr
+            available_out[b] = dexpr.union(in_exps.difference(ekill))
+            if orig is None or orig != available_out[b]:
+                changed = True
+
+    for b in blocks:
+        b.available_exp_in = available_in[b]
+        b.available_exp_out = available_out[b]
+
+    hoist = {}
+
+    for b in blocks:
+        pre_hoist = anticipated[b].difference(available_out[b])
+        hoist[b] = set()
+        for e in pre_hoist:
+            if len(b.out_blocks) > 1 and not all([e not in block_gens[c] for c in b.out_blocks]):
+                hoist[b].add(e)
+
+    visited_blocks = set()
+
+    def retarget_exp(b: TripleBlock, e: Expression, tv: TripleValue):
+        visited_blocks.add(b)
+        for t in b.trips:
+            if does_triple_kill_expression(t, e):
+                break
+            if does_triple_use_expression(t, e):
+                if t.l_val.typ == TripleValueType.TRIPLE_REF and triple_matches_exp(t.l_val.value, e):
+                    t.l_val = copy(tv)
+                elif t.r_val.typ == TripleValueType.TRIPLE_REF and triple_matches_exp(t.r_val.value, e):
+                    t.r_val = copy(tv)
+                CHANGE_HINTS[t] = "Retarget to Non-Redundant Expression"
+        else:
+            for ob in b.out_blocks:
+                if ob not in visited_blocks:
+                    retarget_exp(ob, e, tv)
+
+    for b,v in hoist.items():
+        for e in v:
+            new_trip = exp_to_triple(e)
+            opt_ctx.insert_triple(opt_ctx.trips.index(b.trips[0]), new_trip, "Redundant Expression Motion")
+            visited_blocks.clear()
+            retarget_exp(b, e, create_tref_value(new_trip))
+
+    for b in temp_blocks:
+        assert len(b.in_blocks) == 1
+        parent = b.in_blocks[0]
+        parent.trips.extend(b.trips)
+        parent.out_blocks = b.out_blocks
+        for child in parent.out_blocks:
+            child.in_blocks.remove(b)
+            child.in_blocks.append(parent)
+        blocks.remove(b)
+    
+    pass
+
 def annotate_triples(trips: List[Triple]):
     for i, t in enumerate(trips):
         if t.typ == TripleType.IF_COND and i > 0:
@@ -870,7 +1072,13 @@ def optimize_by_block(opt_ctx: OptimizationContext):
 
 def optimize_regional(opt_ctx: OptimizationContext):
 
+    if OPTIMIZATION_FLAGS["code-hoisting"]:
+        index_triples(opt_ctx.trips)
+        opt_ctx.recalculate_blocks()
+        expression_analysis(opt_ctx)
+
     if OPTIMIZATION_FLAGS["common-exp"]:
+        opt_ctx.recalculate_blocks()
         common_removed = {}
 
         for t in opt_ctx.trips:
@@ -886,6 +1094,7 @@ def optimize_regional(opt_ctx: OptimizationContext):
             opt_ctx.remove_triple(t, "Common Expression")
 
     if OPTIMIZATION_FLAGS["loop-optimization"]:
+        opt_ctx.evaluate_triple_references()
         while True:
             index_triples(opt_ctx.trips)
             opt_ctx.recalculate_blocks()
@@ -897,6 +1106,7 @@ def optimize_regional(opt_ctx: OptimizationContext):
                     break
             else:
                 break
+
 
 def optimize_triples(trip_ctx: FunctionTripleContext):
     did_modify = True

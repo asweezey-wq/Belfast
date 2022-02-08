@@ -233,93 +233,13 @@ def create_interference_graph(trips: List[Triple], val_liveness: Dict[TripleValu
 
     return interf_graph
 
-def does_value_need_color(tv: TripleValue):
-    return tv.typ in [TripleValueType.REGISTER, TripleValueType.VAR_REF, TripleValueType.TRIPLE_REF, TripleValueType.ADDRESS_COMPUTE]
-
-def get_defines(triple: Triple):
-    match triple.typ:
-        case TripleType.ASSIGN:
-            return (create_var_ref_value(triple.l_val.value),)
-        case TripleType.REGMOVE:
-            return (triple.l_val,)
-        case TripleType.BINARY_OP | TripleType.UNARY_OP | TripleType.NOP_REF | TripleType.LOAD:
-            if (triple.flags & TF_BOOL_FORWARDED) > 0:
-                # Bool forwarded values are not stored
-                return ()
-            return (create_tref_value(triple),)
-        case TripleType.CALL | TripleType.SYSCALL:
-            return [create_tref_value(triple),] + [create_register_value(i) for i in CALLER_SAVED_REG]
-        case TripleType.ARG:
-            return (create_register_value(SYSCALL_ARG_REGISTERS[triple.data] if triple.flags & TF_SYSCALL else ARG_REGISTERS[triple.data]),)
-    return ()
-
-def get_uses(triple: Triple, colored_only=True):
-    vals = []
-    match triple.typ:
-        case TripleType.ASSIGN | TripleType.REGMOVE:
-            if not colored_only or does_value_need_color(triple.r_val):
-                vals = [triple.r_val,]
-        case TripleType.BINARY_OP | TripleType.STORE:
-            vals = []
-            if not colored_only or does_value_need_color(triple.r_val):
-                vals.append(triple.r_val)
-            if not colored_only or does_value_need_color(triple.l_val):
-                vals.append(triple.l_val)
-            if triple.typ == TripleType.BINARY_OP and triple.op in [Operator.DIVIDE, Operator.MODULUS, Operator.MULTIPLY]:
-                vals.append(create_register_value(RDX_INDEX))
-        case TripleType.UNARY_OP | TripleType.IF_COND | TripleType.NOP_USE | TripleType.NOP_REF | TripleType.LOAD | TripleType.ARG | TripleType.RETURN:
-            if triple.typ == TripleType.IF_COND and triple.l_val.typ == TripleValueType.TRIPLE_REF and (triple.l_val.value.flags & TF_BOOL_FORWARDED) > 0:
-                return ()
-            if not colored_only or does_value_need_color(triple.l_val):
-                vals = [triple.l_val,]
-        case TripleType.SYSCALL | TripleType.CALL:
-            vals = [create_register_value(v) for v in ARG_REGISTERS[:triple.data]]
-        case TripleType.RETURN:
-            vals = [create_register_value(v) for v in CALLEE_SAVED_REG]
-    new_vals = []
-    for v in vals:
-        if v.typ == TripleValueType.ADDRESS_COMPUTE:
-            if does_value_need_color(v.value[0]):
-                new_vals.append(v.value[0])
-            if does_value_need_color(v.value[1]):
-                new_vals.append(v.value[1])
-        else:
-            new_vals.append(v)
-    if len(new_vals) > 0:
-        return tuple(new_vals)
-    return ()
-
 def identify_loops(opt_ctx) -> bool:
     did_change = False
-    block_visit = {}
-    dom_map = {}
+    block_visit = opt_ctx.block_visit_in
+    dom_map = opt_ctx.block_dominance_map
     blocks = opt_ctx.blocks
     if len(blocks) == 0:
         return False
-    trips = opt_ctx.trips
-    open_block_set = [blocks[0]]
-    while len(open_block_set) > 0:
-        b = open_block_set.pop(0)
-        block_visit[b] = set([b])
-        for i in b.in_blocks:
-            if i in block_visit:
-                block_visit[b].update(block_visit[i])
-        temp = None
-        if len(b.in_blocks) > 0:
-            for in_b in b.in_blocks:
-                if in_b not in block_visit:
-                    continue
-                if temp is None:
-                    temp = block_visit[in_b]
-                else:
-                    temp = temp.intersection(block_visit[in_b])
-            max_block = sorted(list(temp), key= lambda x: x.index)[-1]
-            dom_map[b] = max_block
-        else:
-            dom_map[b] = None
-        for o_b in b.out_blocks:
-            if o_b not in open_block_set and o_b not in dom_map:
-                open_block_set.append(o_b)
 
     def is_dominated_by(b, dom):
         if b == dom:
