@@ -18,6 +18,7 @@ OPTIMIZATION_FLAGS_DEFAULTS = {
     "loop-optimization": True,
     'value-simplification': True,
     'code-hoisting': True,
+    "code-motion": True,
 }
 
 OPTIMIZATION_FLAGS = dict(OPTIMIZATION_FLAGS_DEFAULTS)
@@ -130,6 +131,13 @@ class OptimizationContext:
         idx = self.trips.index(old_t)
         self.remove_triple(old_t, change_hint)
         self.insert_triple(idx, new_t, change_hint)
+
+    def move_triple(self, t: Triple, new_ind: int, change_hint=None):
+        self.trips.remove(t)
+        self.trips.insert(new_ind - 1, t)
+        if change_hint:
+            CHANGE_HINTS[t] = change_hint
+        self.triples_dirty = True
 
     def does_triple_dominate(self, dom_trip: Triple, sub_trip: Triple):
         if dom_trip not in self.dominance_map:
@@ -773,7 +781,7 @@ def expression_analysis(opt_ctx: OptimizationContext):
         pre_hoist = anticipated[b].difference(available_out[b])
         hoist[b] = set()
         for e in pre_hoist:
-            if len(b.out_blocks) > 1 and not all([e not in block_gens[c] for c in b.out_blocks]):
+            if len(b.out_blocks) > 1 and all([e in block_gens[c] for c in b.out_blocks]):
                 hoist[b].add(e)
 
     visited_blocks = set()
@@ -812,6 +820,56 @@ def expression_analysis(opt_ctx: OptimizationContext):
         blocks.remove(b)
     
     pass
+
+def code_motion(b: TripleBlock, opt_ctx: OptimizationContext):
+    move_before = {}
+    for i,t in enumerate(b.trips):
+        if t.typ == TripleType.ASSIGN:
+            var_ref = create_var_ref_value(t.l_val.value)
+            if var_ref in b.in_vals:
+                continue
+            was_assigned = False
+            for j,t2 in enumerate(b.trips[i+1:]):
+                if triple_assigns_var(t2, var_ref.value):
+                    was_assigned = True
+                    break
+                if triple_references_var(t2, var_ref.value):
+                    break
+            else:
+                continue
+            if not was_assigned and j > 0:
+                significant_values = set(get_triple_referenced_values(t2))
+                for k in reversed(range(1,j+1)):
+                    tk = b.trips[i+k]
+                    should_defer = False
+                    if tk.typ == TripleType.ARG:
+                        should_defer = True
+                    elif any([(v.typ == TripleValueType.VAR_REF and triple_assigns_var(tk, v.value)) or v in get_triple_referenced_values(tk) for v in significant_values]):
+                        significant_values.update(get_triple_referenced_values(tk))
+                        should_defer = True
+                    if not should_defer:
+                        move_before[t] = b.trips[i+k+1]
+                        break
+        elif t.typ == TripleType.BINARY_OP and t in opt_ctx.triple_references:
+            exp = triple_to_exp(t)
+            was_killed = False
+            for j,t2 in enumerate(b.trips[i+1:]):
+                if does_triple_kill_expression(t2, exp):
+                    was_killed = True
+                    break
+                if does_triple_use_expression(t2, exp):
+                    break
+            else:
+                continue
+            if not was_killed and j > 0:
+                
+                move_before[t] = t2
+
+    pass
+    for t,t2 in move_before.items():
+        opt_ctx.move_triple(t, opt_ctx.trips.index(t2), "Code Motion")  
+
+    pass          
 
 def annotate_triples(trips: List[Triple]):
     for i, t in enumerate(trips):
@@ -864,6 +922,190 @@ def create_dominance_map(blocks: List[TripleBlock]) -> Dict[Triple, Optional[Tri
             if o_b.index not in block_visit and o_b not in block_queue:
                 block_queue.append(o_b)
     return dom_map
+
+def block_local_optimize(b: TripleBlock, opt_ctx: OptimizationContext):
+    for i,t in enumerate(b.trips):
+        if t.typ == TripleType.ASSIGN:
+            # TODO: Global value forwarding
+            if OPTIMIZATION_FLAGS["unused-code"]:
+                var = create_var_ref_value(t.l_val.value)
+                var_uses = [rt for rt in b.trips[i:] if triple_references_var(rt, var.value)]
+                var_used = var in b.out_vals or len(var_uses) > 0
+                if not var_used or (var in b.vals_assigned and b.trips.index(b.vals_assigned[var]) > i):
+                    opt_ctx.remove_triple(t, "Assignment Without Use")
+                    continue
+            if OPTIMIZATION_FLAGS["value-forwarding"]:
+                if t.r_val.typ in [TripleValueType.CONSTANT, TripleValueType.VAR_REF]:
+                    # No point in forwarding triples, that just causes problems
+                    next_assign = opt_ctx.find_assign_between(t, b.trips[-1], var.value)
+                    last_ind = b.trips.index(next_assign) if next_assign else len(b.trips)
+                    removed_all_uses = True
+                    for rt in var_uses:
+                        rt_ind = b.trips.index(rt)
+                        if i < rt_ind < last_ind:
+                            has_value_changed = True
+                            if t.r_val.typ == TripleValueType.CONSTANT:
+                                has_value_changed = False
+                            elif t.r_val.typ == TripleValueType.VAR_REF:
+                                has_value_changed = opt_ctx.find_assign_between(t, rt, t.r_val.value) is not None
+                            if not has_value_changed:
+                                if rt.l_val and triple_values_equal(rt.l_val, var):
+                                    rt.l_val = copy(t.r_val)
+                                    CHANGE_HINTS[rt] = "Value Fowarded"
+                                if rt.r_val and triple_values_equal(rt.r_val, var):
+                                    rt.r_val = copy(t.r_val)
+                                    CHANGE_HINTS[rt] = "Value Fowarded"
+                            else:
+                                removed_all_uses = False
+                    if var not in b.out_vals and next_assign is None and removed_all_uses:
+                        opt_ctx.remove_triple(t, "Value Forwarded")
+                        continue
+        elif t.typ == TripleType.NOP_REF and (t.flags & TF_DONT_FORWARD) == 0:
+            if OPTIMIZATION_FLAGS["value-forwarding"]:
+                opt_ctx.retarget_triple_references(t, t.l_val, "Value Forwarded")
+                opt_ctx.remove_triple(t, "Value Forwarded")
+                continue
+        if OPTIMIZATION_FLAGS['const-eval']:
+            c = evaluate_triple_const(t)
+            if c is not None:
+                opt_ctx.retarget_triple_references(t, create_const_value(c), "Constant Propagation")
+                continue
+            if t.typ == TripleType.IF_COND:
+                c = None
+                if t.l_val.typ == TripleValueType.TRIPLE_REF:
+                    c = evaluate_triple_const(t.l_val.value)
+                elif t.l_val.typ == TripleValueType.CONSTANT:
+                    c = t.l_val.value
+                if c is not None:
+                    if (c == 0) == (t.op == Operator.NE):
+                        opt_ctx.replace_triple(t, Triple(TripleType.GOTO, None, t.r_val, None, uid=triple_uid()))
+                    else:
+                        opt_ctx.remove_triple(t)
+                    continue
+        if OPTIMIZATION_FLAGS["null-op"]:
+            nullop_val = null_operation_eval(t)
+            if nullop_val is not None:
+                opt_ctx.retarget_triple_references(t, nullop_val, "Null-Op Retarget")
+                opt_ctx.remove_triple(t)
+                continue
+        if OPTIMIZATION_FLAGS["strength-reduce"]:
+            strength_reduce(t)
+
+    if OPTIMIZATION_FLAGS["code-motion"]:
+        code_motion(b, opt_ctx)
+
+def optimize_by_block(opt_ctx: OptimizationContext):
+    opt_ctx.evaluate_triple_references()
+    opt_ctx.evaluate_label_references()
+    
+    forward_labels(opt_ctx)
+    remove_unused_labels(opt_ctx)
+    remove_pointless_goto(opt_ctx)
+    remove_unreachable_triples(opt_ctx)
+
+    if OPTIMIZATION_FLAGS["unused-code"]:
+        remove_unused_triples(opt_ctx)
+
+    if len(opt_ctx.trips) == 0:
+        return
+
+    opt_ctx.recalculate_blocks()
+
+    for b in opt_ctx.blocks:
+        block_local_optimize(b, opt_ctx)
+
+    pass
+
+def optimize_regional(opt_ctx: OptimizationContext):
+
+    if OPTIMIZATION_FLAGS["code-hoisting"]:
+        index_triples(opt_ctx.trips)
+        opt_ctx.recalculate_blocks()
+        expression_analysis(opt_ctx)
+
+    if OPTIMIZATION_FLAGS["common-exp"]:
+        opt_ctx.recalculate_blocks()
+        common_removed = {}
+
+        for t in opt_ctx.trips:
+            if does_triple_produce_data(t):
+                match = opt_ctx.common_exp_match(t)
+                if match:
+                    while match in common_removed:
+                        match = common_removed[match]
+                    opt_ctx.retarget_triple_references(t, create_tref_value(match), "Common Expression")
+                    common_removed[t] = match
+        
+        for t in common_removed:
+            opt_ctx.remove_triple(t, "Common Expression")
+
+    if OPTIMIZATION_FLAGS["loop-optimization"]:
+        opt_ctx.evaluate_triple_references()
+        while True:
+            index_triples(opt_ctx.trips)
+            opt_ctx.recalculate_blocks()
+            identify_loops(opt_ctx)
+
+            loops_by_prio = sorted(opt_ctx.loops.items(), key=lambda x: opt_ctx.loop_prio[x[0]], reverse=True)
+            for h,e in loops_by_prio:
+                if optimize_loop(h, e, opt_ctx):
+                    break
+            else:
+                break
+
+def optimize_triples(trip_ctx: FunctionTripleContext):
+    did_modify = True
+    trips = trip_ctx.triples
+
+    start_len = len(trips)
+
+    tripopt_file = os.path.join(belfast_data.COMPILER_SETTINGS.tripopt_dir, f"{trip_ctx.ctx_name}_tripopt.tripstr")
+
+    index_triples(trips)
+    prev_trips: List[Triple] = deepcopy_trips(trips) if belfast_data.COMPILER_SETTINGS.generate_tripstr else None
+
+    opt_ctx = OptimizationContext(trips)
+
+    if belfast_data.COMPILER_SETTINGS.generate_tripstr and belfast_data.COMPILER_SETTINGS.generate_diff:
+        with open(tripopt_file, 'w') as f:
+            for t in trips:
+                f.write(f"{print_triple(t)}\n")
+            f.write("\n")
+
+    passes = 0
+
+    while True:
+        passes += 1
+        opt_ctx.triples_dirty = False
+        if len(opt_ctx.trips) == 0:
+            break
+        optimize_by_block(opt_ctx)
+
+        if not opt_ctx.triples_dirty:
+            optimize_regional(opt_ctx)
+        
+        if not opt_ctx.triples_dirty:
+            break
+
+        index_triples(trips)
+        if belfast_data.COMPILER_SETTINGS.generate_diff:
+            if belfast_data.COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
+                d = get_triple_delta(prev_trips, trips)
+                if d == ([], [], []):
+                    break
+                output_triple_delta_to_file(d, tripopt_file)
+                with open(tripopt_file, 'a') as f:
+                    for t in trips:
+                        f.write(f"{print_triple(t)}\n")
+                    f.write("\n")
+                prev_trips = deepcopy_trips(trips)
+                CHANGE_HINTS.clear()
+
+    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
+        print(f"[INFO] [{trip_ctx.ctx_name}] Optimization passes: {passes}")
+        print(f"[INFO] [{trip_ctx.ctx_name}] Optimization removed {start_len - len(trips)} triples")
+
+    return trips
 
 def output_triple_delta_to_file(d, filename):
     with open(filename, 'a') as f:
@@ -979,185 +1221,3 @@ def get_triple_delta(old_trips: List[Triple], new_trips: List[Triple]):
 
     removed_trips = list(trips_by_uid.values())
     return added_trips, changed_trips, removed_trips
-
-def block_local_optimize(b: TripleBlock, opt_ctx: OptimizationContext):
-    for i,t in enumerate(b.trips):
-        if t.typ == TripleType.ASSIGN:
-            # TODO: Global value forwarding
-            if OPTIMIZATION_FLAGS["unused-code"]:
-                var = create_var_ref_value(t.l_val.value)
-                var_uses = [rt for rt in b.trips[i:] if triple_references_var(rt, var.value)]
-                var_used = var in b.out_vals or len(var_uses) > 0
-                if not var_used or (var in b.vals_assigned and b.trips.index(b.vals_assigned[var]) > i):
-                    opt_ctx.remove_triple(t, "Assignment Without Use")
-                    continue
-            if OPTIMIZATION_FLAGS["value-forwarding"]:
-                if t.r_val.typ in [TripleValueType.CONSTANT, TripleValueType.VAR_REF]:
-                    # No point in forwarding triples, that just causes problems
-                    next_assign = opt_ctx.find_assign_between(t, b.trips[-1], var.value)
-                    last_ind = b.trips.index(next_assign) if next_assign else len(b.trips)
-                    removed_all_uses = True
-                    for rt in var_uses:
-                        rt_ind = b.trips.index(rt)
-                        if i < rt_ind < last_ind:
-                            has_value_changed = True
-                            if t.r_val.typ == TripleValueType.CONSTANT:
-                                has_value_changed = False
-                            elif t.r_val.typ == TripleValueType.VAR_REF:
-                                has_value_changed = opt_ctx.find_assign_between(t, rt, t.r_val.value) is not None
-                            if not has_value_changed:
-                                if rt.l_val and triple_values_equal(rt.l_val, var):
-                                    rt.l_val = copy(t.r_val)
-                                    CHANGE_HINTS[rt] = "Value Fowarded"
-                                if rt.r_val and triple_values_equal(rt.r_val, var):
-                                    rt.r_val = copy(t.r_val)
-                                    CHANGE_HINTS[rt] = "Value Fowarded"
-                            else:
-                                removed_all_uses = False
-                    if var not in b.out_vals and next_assign is None and removed_all_uses:
-                        opt_ctx.remove_triple(t, "Value Forwarded")
-                        continue
-        elif t.typ == TripleType.NOP_REF and (t.flags & TF_DONT_FORWARD) == 0:
-            if OPTIMIZATION_FLAGS["value-forwarding"]:
-                opt_ctx.retarget_triple_references(t, t.l_val, "Value Forwarded")
-                opt_ctx.remove_triple(t, "Value Forwarded")
-                continue
-        if OPTIMIZATION_FLAGS['const-eval']:
-            c = evaluate_triple_const(t)
-            if c is not None:
-                opt_ctx.retarget_triple_references(t, create_const_value(c), "Constant Propagation")
-                continue
-            if t.typ == TripleType.IF_COND:
-                c = None
-                if t.l_val.typ == TripleValueType.TRIPLE_REF:
-                    c = evaluate_triple_const(t.l_val.value)
-                elif t.l_val.typ == TripleValueType.CONSTANT:
-                    c = t.l_val.value
-                if c is not None:
-                    if (c == 0) == (t.op == Operator.NE):
-                        opt_ctx.replace_triple(t, Triple(TripleType.GOTO, None, t.r_val, None, uid=triple_uid()))
-                    else:
-                        opt_ctx.remove_triple(t)
-                    continue
-        if OPTIMIZATION_FLAGS["null-op"]:
-            nullop_val = null_operation_eval(t)
-            if nullop_val is not None:
-                opt_ctx.retarget_triple_references(t, nullop_val, "Null-Op Retarget")
-                opt_ctx.remove_triple(t)
-                continue
-        if OPTIMIZATION_FLAGS["strength-reduce"]:
-            strength_reduce(t)
-
-def optimize_by_block(opt_ctx: OptimizationContext):
-    opt_ctx.evaluate_triple_references()
-    opt_ctx.evaluate_label_references()
-    
-    forward_labels(opt_ctx)
-    remove_unused_labels(opt_ctx)
-    remove_pointless_goto(opt_ctx)
-    remove_unreachable_triples(opt_ctx)
-
-    if OPTIMIZATION_FLAGS["unused-code"]:
-        remove_unused_triples(opt_ctx)
-
-    if len(opt_ctx.trips) == 0:
-        return
-
-    opt_ctx.recalculate_blocks()
-
-    for b in opt_ctx.blocks:
-        block_local_optimize(b, opt_ctx)
-
-    pass
-
-def optimize_regional(opt_ctx: OptimizationContext):
-
-    if OPTIMIZATION_FLAGS["code-hoisting"]:
-        index_triples(opt_ctx.trips)
-        opt_ctx.recalculate_blocks()
-        expression_analysis(opt_ctx)
-
-    if OPTIMIZATION_FLAGS["common-exp"]:
-        opt_ctx.recalculate_blocks()
-        common_removed = {}
-
-        for t in opt_ctx.trips:
-            if does_triple_produce_data(t):
-                match = opt_ctx.common_exp_match(t)
-                if match:
-                    while match in common_removed:
-                        match = common_removed[match]
-                    opt_ctx.retarget_triple_references(t, create_tref_value(match), "Common Expression")
-                    common_removed[t] = match
-        
-        for t in common_removed:
-            opt_ctx.remove_triple(t, "Common Expression")
-
-    if OPTIMIZATION_FLAGS["loop-optimization"]:
-        opt_ctx.evaluate_triple_references()
-        while True:
-            index_triples(opt_ctx.trips)
-            opt_ctx.recalculate_blocks()
-            identify_loops(opt_ctx)
-
-            loops_by_prio = sorted(opt_ctx.loops.items(), key=lambda x: opt_ctx.loop_prio[x[0]], reverse=True)
-            for h,e in loops_by_prio:
-                if optimize_loop(h, e, opt_ctx):
-                    break
-            else:
-                break
-
-
-def optimize_triples(trip_ctx: FunctionTripleContext):
-    did_modify = True
-    trips = trip_ctx.triples
-
-    start_len = len(trips)
-
-    tripopt_file = os.path.join(belfast_data.COMPILER_SETTINGS.tripopt_dir, f"{trip_ctx.ctx_name}_tripopt.tripstr")
-
-    index_triples(trips)
-    prev_trips: List[Triple] = deepcopy_trips(trips) if belfast_data.COMPILER_SETTINGS.generate_tripstr else None
-
-    opt_ctx = OptimizationContext(trips)
-
-    if belfast_data.COMPILER_SETTINGS.generate_tripstr and belfast_data.COMPILER_SETTINGS.generate_diff:
-        with open(tripopt_file, 'w') as f:
-            for t in trips:
-                f.write(f"{print_triple(t)}\n")
-            f.write("\n")
-
-    passes = 0
-
-    while True:
-        passes += 1
-        opt_ctx.triples_dirty = False
-        if len(opt_ctx.trips) == 0:
-            break
-        optimize_by_block(opt_ctx)
-
-        if not opt_ctx.triples_dirty:
-            optimize_regional(opt_ctx)
-        
-        if not opt_ctx.triples_dirty:
-            break
-
-        index_triples(trips)
-        if belfast_data.COMPILER_SETTINGS.generate_diff:
-            if belfast_data.COMPILER_SETTINGS.generate_tripstr and prev_trips is not None:
-                d = get_triple_delta(prev_trips, trips)
-                if d == ([], [], []):
-                    break
-                output_triple_delta_to_file(d, tripopt_file)
-                with open(tripopt_file, 'a') as f:
-                    for t in trips:
-                        f.write(f"{print_triple(t)}\n")
-                    f.write("\n")
-                prev_trips = deepcopy_trips(trips)
-                CHANGE_HINTS.clear()
-
-    if belfast_data.COMPILER_SETTINGS.verbose >= 1:
-        print(f"[INFO] [{trip_ctx.ctx_name}] Optimization passes: {passes}")
-        print(f"[INFO] [{trip_ctx.ctx_name}] Optimization removed {start_len - len(trips)} triples")
-
-    return trips
