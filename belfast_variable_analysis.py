@@ -385,7 +385,7 @@ def optimize_loop(header: TripleBlock, end: TripleBlock, opt_ctx):
     for tv,lin in linear_combinations.items():
         if tv in basic_induction_vars:
             continue
-        if lin.coefficient_val is None and not lin.negate and len(lin.operations) == 1 and lin.operations[0][1].typ == TripleValueType.CONSTANT:
+        if lin.coefficient_val is None and not lin.negate and len(lin.operations) == 1:
             # x + c
             # This doesnt help us
             continue
