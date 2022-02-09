@@ -844,7 +844,7 @@ def code_motion(b: TripleBlock, opt_ctx: OptimizationContext):
                     should_defer = False
                     if tk.typ == TripleType.ARG:
                         should_defer = True
-                    elif any([(v.typ == TripleValueType.VAR_REF and triple_assigns_var(tk, v.value)) or v in get_triple_referenced_values(tk) for v in significant_values]):
+                    elif any([(v.typ == TripleValueType.VAR_REF and triple_assigns_var(tk, v.value)) or (v.typ == TripleValueType.TRIPLE_REF and v.value == tk) for v in significant_values]):
                         significant_values.update(get_triple_referenced_values(tk))
                         should_defer = True
                     if not should_defer:
@@ -862,8 +862,18 @@ def code_motion(b: TripleBlock, opt_ctx: OptimizationContext):
             else:
                 continue
             if not was_killed and j > 0:
-                
-                move_before[t] = t2
+                significant_values = set(get_triple_referenced_values(t2))
+                for k in reversed(range(1,j+1)):
+                    tk = b.trips[i+k]
+                    should_defer = False
+                    if tk.typ == TripleType.ARG:
+                        should_defer = True
+                    elif any([(v.typ == TripleValueType.VAR_REF and triple_assigns_var(tk, v.value)) or (v.typ == TripleValueType.TRIPLE_REF and v.value == tk) for v in significant_values]):
+                        significant_values.update(get_triple_referenced_values(tk))
+                        should_defer = True
+                    if not should_defer:
+                        move_before[t] = b.trips[i+k+1]
+                        break
 
     pass
     for t,t2 in move_before.items():
