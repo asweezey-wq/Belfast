@@ -1,0 +1,16 @@
+fun f buf b do
+    var j = 0
+    if b then
+        j = load64(buf)
+    else
+        store64(buf, 256)
+        j = load64(buf)
+    end
+    return j
+end
+
+fun main do
+    var buf = buffer(8)
+    store64(buf, 123)
+    return (f(buf, 1) - 123) + (f(buf, 0) - 256)
+end

@@ -1,0 +1,15 @@
+fun f i do
+    var j = i * 4
+    var k = i * 5
+    var m = j + k
+    while i do
+        i = i - 1
+        j = j + 1
+        k = 2 * j + k
+    end
+    return j + k + m
+end
+
+fun main do
+    return f(5) - 325
+end

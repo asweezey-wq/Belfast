@@ -16,6 +16,7 @@ def run_test(testfile):
         pass
     c = CompilerSettings(['.', 'std'])
     c.tripstr_filename = f'./tests/tripstr/{testfile.split("/")[-1][:-3]}.tripstr'
+    c.generate_tripstr = True
     c.output_filename = f'./tests/asm/{testfile.split("/")[-1][:-3]}.o'
     c.verbose = 0
     belfast.set_compiler_settings(c)

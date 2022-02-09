@@ -1,0 +1,14 @@
+fun f i b do
+    var j = 0
+    if b then
+        j = i * 5
+    else
+        i = 2
+        j = i * 5
+    end
+    return j
+end
+
+fun main do
+    return (f(5,1) == 25 && f(5,0) == 10) - 1
+end

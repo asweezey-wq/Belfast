@@ -1,0 +1,16 @@
+fun f i do
+    var j = 0
+    while i do
+        if i % 2 == 0 then
+            j = j + i
+        else
+            j = j + i - 1
+        end
+        i = i - 1
+    end
+    return j
+end
+
+fun main do
+    return f(4) - 8
+end
