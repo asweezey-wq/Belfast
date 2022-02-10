@@ -222,6 +222,7 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: Context_x86):
     spilled_values = []
     memory_register_value = None
     interf_graph = create_interference_graph(trips, val_live)
+    uses_globals = False
 
     for t in trips:
         if t.typ == TripleType.CALL or t.typ == TripleType.SYSCALL:
@@ -232,6 +233,8 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: Context_x86):
                         interf_graph[tref] = set()
                     interf_graph[tref].add(v)
                     interf_graph[v].add(tref)
+        if not uses_globals and any([v.typ == TripleValueType.GLOBAL_REF for v in get_uses(t, colored_only=False)]):
+            uses_globals = True
 
     precolors = {}
     coalesces_performed = {}
@@ -259,6 +262,14 @@ def x86_assign_registers(trips: List[Triple], trip_ctx: Context_x86):
                                 precolors[v] = reg_order.index(RAX_INDEX)
                     case TripleType.SYSCALL | TripleType.CALL:
                         precolors[v] = reg_order.index(RAX_INDEX)
+            case TripleValueType.GLOBAL_REF | TripleValueType.GLOBAL_LABEL:
+                uses_globals = True
+
+    if uses_globals:
+        memory_register_value = TripleValue(TripleValueType.ON_STACK, 0)
+        for k in interf_graph:
+            interf_graph[k].add(memory_register_value)
+        interf_graph[memory_register_value] = set(interf_graph.keys())
 
     while True:
         coalesce_nodes = {}
@@ -456,14 +467,14 @@ def convert_x86_triples(trips: List[Triple], trip_ctx: Context_x86):
                     v1 = TripleValue(TripleValueType.REGISTER, v1_r)
                 elif v1 in trip_ctx.spilled_values:
                     v1 = TripleValue(TripleValueType.ON_STACK, trip_ctx.spilled_values[v1] * 8)
-                elif v1.typ != TripleValueType.CONSTANT and v1.typ != TripleValueType.REGISTER:
+                elif v1.typ != TripleValueType.CONSTANT and v1.typ != TripleValueType.REGISTER and v1.typ != TripleValueType.GLOBAL_REF:
                     assert False
                 v2_r = trip_ctx.get_allocated_register(v2, t.index)
                 if v2_r is not None:
                     v2 = TripleValue(TripleValueType.REGISTER, v2_r)
                 elif v2 in trip_ctx.spilled_values:
                     v2 = TripleValue(TripleValueType.ON_STACK, trip_ctx.spilled_values[v2] * 8)
-                elif v2.typ != TripleValueType.CONSTANT and v2.typ != TripleValueType.REGISTER:
+                elif v2.typ != TripleValueType.CONSTANT and v2.typ != TripleValueType.REGISTER and v2.typ != TripleValueType.GLOBAL_REF:
                     assert False
                 t.l_val.value = (v1, v2, s)
             else:
@@ -539,7 +550,7 @@ def triple_value_str(tv: TripleValue, trip_ctx: Context_x86, as_hex=False, size=
         case TripleValueType.FUN_LABEL:
             return f"_{tv.value}"
         case TripleValueType.ON_STACK:
-            return f"qword [rsp+{tv.value}]"
+            return f"qword [rsp+{tv.value}]" if tv.value > 0 else "qword [rsp]"
         case TripleValueType.GLOBAL_REF:
             return f"qword [_{tv.value}]"
         case TripleValueType.GLOBAL_LABEL:
@@ -591,6 +602,9 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Contex
                 saved_registers.append(i)
                 code_stats.mem_stores += 1
                 write_asm(f"push {reg_str_for_size(i)}")
+        if trip_ctx.memory_spill_register is not None and trip_ctx.memory_spill_register in CALLEE_SAVED_REG:
+            saved_registers.append(trip_ctx.memory_spill_register)
+            write_asm(f"push {reg_str_for_size(trip_ctx.memory_spill_register)}")
 
     stack_space_alloc = 0
 
@@ -818,6 +832,9 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Contex
                         code_stats.mem_stores += 1
                         code_stats.mov_ops += 1
                         write_asm(f"mov {mem_word} [{triple_value_str(lv, trip_ctx)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
+                    elif lv.typ in [TripleValueType.ON_STACK, TripleValueType.GLOBAL_REF]:
+                        write_asm(move_instr(trip_ctx.memory_spill_register, lv, trip_ctx))
+                        write_asm(f"mov {mem_word} [{reg_str_for_size(trip_ctx.memory_spill_register)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
                     elif lv.typ == TripleValueType.ADDRESS_COMPUTE:
                         lv1 = lv.value[0]
                         lv2 = lv.value[1]
@@ -825,21 +842,23 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Contex
                         regs = [v for v in (lv1, lv2) if v.typ == TripleValueType.REGISTER]
                         consts = [v for v in (lv1, lv2) if v.typ == TripleValueType.CONSTANT]
                         stack_vals = [v for v in (lv1, lv2) if v.typ == TripleValueType.ON_STACK]
+                        global_vals = [v for v in (lv1, lv2) if v.typ == TripleValueType.GLOBAL_REF]
+                        memref_vals = stack_vals + global_vals
                         
-                        if len(stack_vals) == 2:
+                        if len(memref_vals) == 2:
                             code_stats.basic_ops += 1
                             code_stats.mov_ops += 2
                             code_stats.mem_loads += 2
                             code_stats.mem_stores += 1
-                            write_asm(move_instr(trip_ctx.memory_spill_register, stack_vals[0], trip_ctx))
-                            write_asm(f"add {reg_str_for_size(trip_ctx.memory_spill_register)}, {triple_value_str(stack_vals[1], trip_ctx)}")
+                            write_asm(move_instr(trip_ctx.memory_spill_register, memref_vals[0], trip_ctx))
+                            write_asm(f"add {reg_str_for_size(trip_ctx.memory_spill_register)}, {triple_value_str(memref_vals[1], trip_ctx)}")
                             write_asm(f"mov {mem_word} [{reg_str_for_size(trip_ctx.memory_spill_register)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
                         else:
-                            if len(stack_vals) == 1:
+                            if len(memref_vals) == 1:
                                 code_stats.mov_ops += 1
                                 code_stats.mem_loads += 1
-                                write_asm(move_instr(trip_ctx.memory_spill_register, stack_vals[0], trip_ctx))
-                                stack_vals.pop()
+                                write_asm(move_instr(trip_ctx.memory_spill_register, memref_vals[0], trip_ctx))
+                                memref_vals.pop()
                                 regs.append(create_register_value(trip_ctx.memory_spill_register))
                             if len(regs) == 2 or (len(regs) == 1 and len(consts) == 1):
                                 la = regs[0]
@@ -852,7 +871,13 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Contex
                     else:
                         assert False, f"Unhandled value type {lv.typ.name}"
                 case TripleType.LOAD:
-                    assert t_reg is not None, "Expected this value to be assigned to a register"
+                    storing_to_mem = False
+                    if t_reg is None:
+                        if create_tref_value(t) in trip_ctx.spilled_values:
+                            storing_to_mem = True
+                            t_reg = trip_ctx.memory_spill_register
+                        else:
+                            assert False, "Invalid destination for LOAD"
                     mem_word = MEM_WORD_SIZE_MAP[t.size]
                     instr = "mov" if t.size == 64 or t.size == 32 else ("movsx" if t.flags & TF_SIGNED else "movzx")
                     t_reg_size = 64 if t.size != 32 else 32
@@ -890,6 +915,9 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Contex
                                 write_asm(f"{instr} {reg_str_for_size(t_reg, t_reg_size)}, {mem_word} [{triple_value_str(la, trip_ctx)}{'+' if pos == 1 else '-'}{triple_value_str(ra, trip_ctx)}]")
                             else:
                                 assert False
+                    if storing_to_mem:
+                        tv = TripleValue(TripleValueType.ON_STACK, trip_ctx.spilled_values[create_tref_value(t)] * 8)
+                        write_asm(f"mov {triple_value_str(tv, trip_ctx)}, {reg_str_for_size(t_reg)}")
 
                 case TripleType.SYSCALL:
                     assert t_reg is not None and t_reg == RAX_INDEX, "Expected SYSCALL to be stored in RAX"
