@@ -1,3 +1,5 @@
+include stdlib
+
 const SYSCALL_MMAP = 0x2000000 + 197
 const SYSCALL_MUNMAP = 0x2000000 + 73
 
@@ -9,12 +11,119 @@ const MAP_PRIVATE = 0x0002
 
 const PAGE_SIZE = 4096
 
+var belloc_data
+
+struct page_data_t
+    page_ptr    8
+    page_len    4
+end
+
+struct belloc_data_t
+    page_data_ptr   8
+    pages_alloced   4
+    page_data_cap   4
+end
+
+fun inline mmap size do 
+    return syscall(SYSCALL_MMAP, 0, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0)
+end
+
+fun inline munmap ptr size do 
+    return syscall(SYSCALL_MUNMAP, ptr, size)
+end
+
+fun belloc_init do
+    belloc_data = mmap(PAGE_SIZE)
+    var page_data_ptr = mmap(PAGE_SIZE)
+    storef(belloc_data_t.page_data_ptr, belloc_data, page_data_ptr)
+    storef(belloc_data_t.pages_alloced, belloc_data, 0)
+    storef(belloc_data_t.page_data_cap, belloc_data, PAGE_SIZE / sizeof(page_data_t))
+end
+
+fun belloc_expand_pages do
+    var bd = belloc_data
+    var palloced = loadf(belloc_data_t.pages_alloced, bd)
+    var pcap = loadf(belloc_data_t.page_data_cap, bd)
+    var newcap = pcap * 2
+    var new_page_data = mmap(newcap * sizeof(page_data_t))
+    var old_page_data = loadf(belloc_data_t.page_data_ptr, bd)
+    memcpy(new_page_data, old_page_data, palloced * sizeof(page_data_t))
+    munmap(old_page_data, pcap * sizeof(page_data_t))
+    storef(belloc_data_t.page_data_ptr, bd, new_page_data)
+    storef(belloc_data_t.page_data_cap, bd, newcap)
+end
+
+fun belloc_alloc_page do
+    var bd = belloc_data
+    var palloced = loadf(belloc_data_t.pages_alloced, bd)
+    var pcap = loadf(belloc_data_t.page_data_cap, bd)
+    if palloced + 1 >= pcap then
+        belloc_expand_pages()
+    end
+    var pdata_next = loadf(belloc_data_t.page_data_ptr, bd) + palloced * sizeof(page_data_t)
+    storef(belloc_data_t.pages_alloced, bd, palloced + 1)
+    var page_ptr = mmap(PAGE_SIZE)
+    storef(page_data_t.page_ptr, pdata_next, page_ptr)
+    storef(page_data_t.page_len, pdata_next, PAGE_SIZE)
+    return pdata_next
+end
+
 // Naive implementation for now, we waste a lot of space this way, as a whole page is allocated regardless of size arg
 fun belloc size do
-    return syscall(SYSCALL_MMAP, 0, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0)
+    if !belloc_data then
+        belloc_init()
+    end
+    var page_data = belloc_alloc_page()
+    return loadf(page_data_t.page_ptr, page_data)
 end
 
 // We free the whole page when we do this?
 fun blfree ptr do
-    return syscall(SYSCALL_MUNMAP, ptr, 1)
+    var bd = belloc_data
+    var num_pages = loadf(belloc_data_t.pages_alloced, bd)
+    var i = 0
+    var pd_ptr = loadf(belloc_data_t.page_data_ptr, bd)
+    var page_data = pd_ptr
+    var success = 0
+    while i < num_pages do
+        if ptr == loadf(page_data_t.page_ptr, page_data) then
+            success = 1
+            break
+        end
+        page_data = page_data + sizeof(page_data_t)
+        i = i + 1
+    end
+    if success then
+        var status = munmap(loadf(page_data_t.page_ptr, page_data), loadf(page_data_t.page_len, page_data))
+        var len = (num_pages-1) * sizeof(page_data_t)
+        var temp_buf = mmap(len)
+        memcpy(temp_buf, page_data + sizeof(page_data_t), len)
+        memcpy(page_data, temp_buf, len)
+        storef(belloc_data_t.pages_alloced, bd, num_pages - 1)
+        return status
+    end
+    return -1
+end
+
+fun bldump do
+    puts("BL DUMP\n")
+    var bd = belloc_data
+    var num_pages = loadf(belloc_data_t.pages_alloced, bd)
+    var i = 0
+    var pd_ptr = loadf(belloc_data_t.page_data_ptr, bd)
+    var page_data = pd_ptr
+    var success = 0
+    while i < num_pages do
+        var ptr = loadf(page_data_t.page_ptr, page_data)
+        var len = loadf(page_data_t.page_len, page_data)
+        puts("Page ")
+        putu(i)
+        puts("Ptr: ")
+        puth(ptr)
+        puts("Size: ")
+        putu(len)
+        page_data = page_data + sizeof(page_data_t)
+        i = i + 1
+    end
+    puts("\n")
 end
