@@ -837,7 +837,7 @@ def code_motion(b: TripleBlock, opt_ctx: OptimizationContext):
                     break
             else:
                 continue
-            if not was_assigned and j > 0:
+            if not was_assigned and j > 4:
                 significant_values = set(get_triple_referenced_values(t2))
                 for k in reversed(range(1,j+1)):
                     tk = b.trips[i+k]
@@ -861,7 +861,7 @@ def code_motion(b: TripleBlock, opt_ctx: OptimizationContext):
                     break
             else:
                 continue
-            if not was_killed and j > 0:
+            if not was_killed and j > 4:
                 significant_values = set(get_triple_referenced_values(t2))
                 for k in reversed(range(1,j+1)):
                     tk = b.trips[i+k]
