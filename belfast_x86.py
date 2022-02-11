@@ -180,6 +180,7 @@ def optimize_x86(trips: List[Triple], trip_ctx: FunctionTripleContext):
         i += lb.size
 
     x86_trips = convert_x86_triples(trips, ctx)
+    index_triples(x86_trips)
 
     return x86_trips, ctx
 
@@ -450,7 +451,8 @@ def convert_x86_triples(trips: List[Triple], trip_ctx: Context_x86):
         r_reg = -1
         if t.l_val:
             lv = t.l_val
-            if t.typ == TripleType.FUN_ARG_IN:
+            if t.typ == TripleType.FUN_ARG_IN or t.typ == TripleType.NOP_USE:
+                to_remove.append(t)
                 continue
             if t.l_val.typ == TripleValueType.VAR_ASSIGN:
                 lv = TripleValue(TripleValueType.VAR_REF, t.l_val.value)
@@ -509,10 +511,22 @@ def convert_x86_triples(trips: List[Triple], trip_ctx: Context_x86):
                 elif v2.typ != TripleValueType.CONSTANT:
                     assert False
                 t.r_val.value = (v1, v2, s)
-        if t.typ == TripleType.ASSIGN:
-            assert l_reg != -1 and r_reg != -1
-            if l_reg == r_reg:
+        if t.typ == TripleType.ASSIGN or t.typ == TripleType.REGMOVE:
+            if t.r_val.typ == TripleValueType.UNKNOWN:
                 to_remove.append(t)
+            else:
+                assert l_reg != -1 and r_reg != -1
+                if l_reg == r_reg:
+                    to_remove.append(t)
+        if t.typ == TripleType.NOP_REF:
+            tref_reg = trip_ctx.get_allocated_register(create_tref_value(t), t.index)
+            if tref_reg is not None:
+                if l_reg != -1 and l_reg == tref_reg:
+                    to_remove.append(t)
+                else:
+                    t.typ = TripleType.REGMOVE
+                    t.r_val = t.l_val
+                    t.l_val = create_register_value(tref_reg)
         # trip_reg = trip_ctx.get_allocated_register(TripleValue(TripleValueType.TRIPLE_REF, t), t.index)
         # trip_str += print_triple(x86_trip) + (f" -> {reg_str_for_size(trip_reg)}" if trip_reg is not None else "") + '\n'
     
@@ -544,6 +558,8 @@ def triple_value_str(tv: TripleValue, trip_ctx: Context_x86, as_hex=False, size=
             return tv.value.label
         case TripleValueType.LOCAL_BUFFER_REF:
             assert tv.value.rsp_offset is not None, "Local buffer was not assigned stack space"
+            if tv.value.rsp_offset == 0:
+                return "[rsp]"
             return f"[rsp+{tv.value.rsp_offset}]"
         case TripleValueType.TRIPLE_TARGET:
             return f"{trip_ctx.ctx_name}_L{tv.value.index}"
@@ -555,6 +571,12 @@ def triple_value_str(tv: TripleValue, trip_ctx: Context_x86, as_hex=False, size=
             return f"qword [_{tv.value}]"
         case TripleValueType.GLOBAL_LABEL:
             return f"_{tv.value}"
+        case TripleValueType.ADDRESS_COMPUTE:
+            v1, v2, pos = tv.value
+            assert v1.typ in (TripleValueType.REGISTER, TripleValueType.GLOBAL_LABEL) and (v2.typ == TripleValueType.REGISTER or v2.typ == TripleValueType.CONSTANT), "Invalid Address Compute args"
+            if v2.typ == TripleValueType.CONSTANT and v2.value == 0:
+                return f"[{triple_value_str(v1, trip_ctx)}]"
+            return f"[{triple_value_str(v1, trip_ctx)}{'+' if pos == 1 else '-'}{triple_value_str(v2, trip_ctx)}]"
         case _:
             assert False, f"Type {tv.typ.name} not implemented"
 
@@ -581,18 +603,178 @@ BOP_MAP = {
     Operator.BITWISE_XOR: 'xor',
 }
 
+UNOP_MAP = {
+    Operator.BITWISE_NOT: "not",
+    Operator.NEGATE: "neg",
+}
+
+class ValueLoc(Enum):
+    UNKNOWN = auto()
+    REGISTER = auto()
+    CONSTANT = auto()
+    ON_STACK = auto()
+    AT_LABEL = auto() # e.g. the value is stored at the label address
+    MEMORY_ADDR_LABEL = auto() # e.g. the value is the label address
+    MEMORY_ADDR_STACK = auto() # e.g. the value is the stack address
+    JMP_LABEL = auto()
+    ADDRESS_COMPUTE = auto()
+    IN_CMP_FLAGS = auto()
+
+def get_value_loc(tv: TripleValue):
+    match tv.typ:
+        case TripleValueType.CONSTANT:
+            return ValueLoc.CONSTANT
+        case TripleValueType.REGISTER:
+            return ValueLoc.REGISTER
+        case TripleValueType.LOCAL_BUFFER_REF:
+            return ValueLoc.MEMORY_ADDR_STACK
+        case TripleValueType.ON_STACK:
+            return ValueLoc.ON_STACK
+        case TripleValueType.STRING_REF | TripleValueType.GLOBAL_LABEL:
+            return ValueLoc.MEMORY_ADDR_LABEL
+        case TripleValueType.GLOBAL_REF:
+            return ValueLoc.AT_LABEL
+        case TripleValueType.TRIPLE_TARGET | TripleValueType.FUN_LABEL:
+            return ValueLoc.JMP_LABEL
+        case TripleValueType.ADDRESS_COMPUTE:
+            return ValueLoc.ADDRESS_COMPUTE
+        case TripleValueType.TRIPLE_REF:
+            if tv.value.flags & TF_BOOL_FORWARDED:
+                return ValueLoc.IN_CMP_FLAGS
+            else:
+                return ValueLoc.UNKNOWN
+        case _:
+            return ValueLoc.UNKNOWN
+
+def get_supported_modes(typ: TripleType):
+    match typ:
+        case TripleType.SYSCALL:
+            return [(ValueLoc.CONSTANT, None),]
+        case TripleType.BINARY_OP:
+            a = []
+            for lvt in (ValueLoc.REGISTER, ValueLoc.ON_STACK, ValueLoc.AT_LABEL, ValueLoc.CONSTANT):
+                for rvt in (ValueLoc.CONSTANT, ValueLoc.REGISTER, ValueLoc.ON_STACK, ValueLoc.AT_LABEL):
+                    a.append((lvt, rvt))
+            return a
+        case TripleType.UNARY_OP:
+            return [(ValueLoc.REGISTER, None),]
+        case TripleType.CALL | TripleType.GOTO:
+            return [(ValueLoc.JMP_LABEL, None)]
+        case TripleType.IF_COND:
+            return [(ValueLoc.REGISTER, ValueLoc.JMP_LABEL),(ValueLoc.IN_CMP_FLAGS, ValueLoc.JMP_LABEL),]
+        case TripleType.ASSIGN:
+            return [(ValueLoc.REGISTER, ValueLoc.REGISTER),(ValueLoc.REGISTER, ValueLoc.CONSTANT),(ValueLoc.REGISTER, ValueLoc.MEMORY_ADDR_STACK),(ValueLoc.REGISTER, ValueLoc.MEMORY_ADDR_LABEL),(ValueLoc.REGISTER, ValueLoc.ON_STACK),(ValueLoc.REGISTER, ValueLoc.AT_LABEL),\
+            (ValueLoc.ON_STACK, ValueLoc.REGISTER), (ValueLoc.ON_STACK, ValueLoc.CONSTANT), ]
+        case TripleType.REGMOVE:
+            return [(ValueLoc.REGISTER, ValueLoc.REGISTER),(ValueLoc.REGISTER, ValueLoc.CONSTANT),(ValueLoc.REGISTER, ValueLoc.ON_STACK),(ValueLoc.REGISTER, ValueLoc.AT_LABEL),(ValueLoc.REGISTER, ValueLoc.MEMORY_ADDR_LABEL),(ValueLoc.REGISTER, ValueLoc.MEMORY_ADDR_STACK),]
+        case TripleType.ARG:
+            return [(ValueLoc.REGISTER, None), (ValueLoc.CONSTANT, None)]
+        case TripleType.STORE:
+            a = []
+            for lvt in (ValueLoc.REGISTER, ValueLoc.ON_STACK, ValueLoc.AT_LABEL, ValueLoc.MEMORY_ADDR_STACK, ValueLoc.MEMORY_ADDR_LABEL, ValueLoc.ADDRESS_COMPUTE):
+                for rvt in (ValueLoc.CONSTANT, ValueLoc.REGISTER, ValueLoc.ON_STACK, ValueLoc.AT_LABEL, ValueLoc.MEMORY_ADDR_STACK):
+                    a.append((lvt, rvt))
+            return a
+        case TripleType.LOAD:
+            return [(v, None) for v in (ValueLoc.REGISTER, ValueLoc.ON_STACK, ValueLoc.AT_LABEL, ValueLoc.MEMORY_ADDR_STACK, ValueLoc.ADDRESS_COMPUTE)]
+        case TripleType.RETURN:
+            return [(ValueLoc.REGISTER, None),(ValueLoc.CONSTANT, None)]
+        case TripleType.LABEL:
+            return [(None, None)]
+        case _:
+            return []
+
+SUPPORTED_MODES = {k:get_supported_modes(k) for k in TripleType._member_map_.values()}
+
 def move_instr(reg:int, tv: TripleValue, trip_ctx: Context_x86):
     if tv.typ in [TripleValueType.BUFFER_REF, TripleValueType.STRING_REF, TripleValueType.LOCAL_BUFFER_REF]:
         return f"lea {reg_str_for_size(reg)}, {triple_value_str(tv, trip_ctx)}"
     else:
         return f"mov {reg_str_for_size(reg)}, {triple_value_str(tv, trip_ctx)}"
 
+def convert_loc(from_v: TripleValue, to_v: TripleValue, trip_ctx: Context_x86):
+    from_loc = get_value_loc(from_v)
+    to_loc = get_value_loc(to_v)
+    assert to_loc not in [ValueLoc.MEMORY_ADDR_LABEL, ValueLoc.CONSTANT, ValueLoc.JMP_LABEL, ValueLoc.MEMORY_ADDR_STACK], "Invalid location conversion destination"
+    move_into_reg = to_loc != ValueLoc.REGISTER and from_loc not in [ValueLoc.CONSTANT, ValueLoc.REGISTER]
+    asm = ""
+    if triple_values_equal(from_v, to_v):
+        return asm
+
+    if from_v.typ == TripleValueType.CONSTANT and from_v.value == 0 and to_v.typ == TripleValueType.REGISTER:
+        return f"xor {triple_value_str(to_v, trip_ctx)}, {triple_value_str(to_v, trip_ctx)}"
+
+    if move_into_reg:
+        asm += move_instr(trip_ctx.memory_spill_register, from_v, trip_ctx)
+        from_loc = ValueLoc.REGISTER
+        from_v = create_register_value(trip_ctx.memory_spill_register)
+    
+    match from_loc:
+        case ValueLoc.REGISTER | ValueLoc.CONSTANT | ValueLoc.ON_STACK | ValueLoc.AT_LABEL:
+            asm += f"mov {triple_value_str(to_v, trip_ctx)}, {triple_value_str(from_v, trip_ctx)}"
+        case ValueLoc.MEMORY_ADDR_LABEL | ValueLoc.MEMORY_ADDR_STACK:
+            asm += f"lea {triple_value_str(to_v, trip_ctx)}, {triple_value_str(from_v, trip_ctx)}"
+        case _:
+            assert False, "Invalid from location"
+
+    return asm
+
+def prep_address_compute(tv: TripleValue, trip_ctx: Context_x86):
+    asm = []
+    lv1 = tv.value[0]
+    lv2 = tv.value[1]
+    pos = tv.value[2]
+
+    locs = (get_value_loc(lv1), get_value_loc(lv2))
+    if locs[0] == ValueLoc.CONSTANT:
+        if pos == -1:
+            assert False
+        else:
+            locs = locs[locs[1], locs[0]]
+            tmp = lv2
+            lv2 = lv1
+            lv1 = tmp
+
+    # TODO: we can combine a stack address and register into one, but address compute doesn't support that rn
+    match locs:
+        case (ValueLoc.REGISTER, ValueLoc.REGISTER) | (ValueLoc.REGISTER, ValueLoc.CONSTANT) | (ValueLoc.MEMORY_ADDR_LABEL, ValueLoc.CONSTANT):
+            pass
+        case (ValueLoc.ON_STACK, ValueLoc.CONSTANT) | (ValueLoc.ON_STACK, ValueLoc.REGISTER) | (ValueLoc.AT_LABEL, ValueLoc.CONSTANT) | (ValueLoc.AT_LABEL, ValueLoc.REGISTER) | (ValueLoc.MEMORY_ADDR_STACK, ValueLoc.REGISTER):
+            # If one value is on stack/in label and the other is a register/constant
+            newv = create_register_value(trip_ctx.memory_spill_register)
+            asm.append(convert_loc(lv1, newv, trip_ctx))
+            lv1 = newv
+        case (ValueLoc.REGISTER, ValueLoc.ON_STACK) | (ValueLoc.REGISTER, ValueLoc.AT_LABEL) | (ValueLoc.REGISTER, ValueLoc.MEMORY_ADDR_STACK):
+            # If one value is on stack/in label and the other is a register/constant
+            newv = create_register_value(trip_ctx.memory_spill_register)
+            asm.append(convert_loc(lv2, newv, trip_ctx))
+            lv2 = newv
+        case (ValueLoc.MEMORY_ADDR_STACK, ValueLoc.CONSTANT):
+            assert lv1.typ == TripleValueType.LOCAL_BUFFER_REF
+            rsp_offset = lv1.value.rsp_offset
+            lv1 = TripleValue(TripleValueType.LOCAL_BUFFER_REF, rsp_offset + lv2.value * pos)
+            lv2 = create_const_value(0)
+        case (ValueLoc.ON_STACK, ValueLoc.ON_STACK) | (ValueLoc.ON_STACK, ValueLoc.AT_LABEL) | (ValueLoc.ON_STACK, ValueLoc.MEMORY_ADDR_STACK) | \
+            (ValueLoc.AT_LABEL, ValueLoc.ON_STACK) | (ValueLoc.AT_LABEL, ValueLoc.AT_LABEL) | (ValueLoc.AT_LABEL, ValueLoc.MEMORY_ADDR_STACK) | \
+            (ValueLoc.MEMORY_ADDR_STACK, ValueLoc.ON_STACK) | (ValueLoc.MEMORY_ADDR_STACK, ValueLoc.AT_LABEL) | (ValueLoc.MEMORY_ADDR_STACK, ValueLoc.MEMORY_ADDR_STACK):
+            newv = create_register_value(trip_ctx.memory_spill_register)
+            asm.append(convert_loc(lv1, newv, trip_ctx))
+            op = "add" if pos == 1 else "sub"
+            asm.append(f"{op} {triple_value_str(newv, trip_ctx)}, {triple_value_str(lv2, trip_ctx)}")
+            lv1 = newv
+            lv2 = create_const_value(0)
+        case _:
+            assert False, f"Unhandled Mode {locs}"
+
+    return TripleValue(TripleValueType.ADDRESS_COMPUTE, (lv1, lv2, pos)), asm
+
 def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Context_x86, code_stats: CodeScoreStat):
     asm = ""
     asm += f"    global _{fun_name}\n_{fun_name}:\n"
     def write_asm(s):
         nonlocal asm
-        asm += f"    {s}\n"
+        if s != "":
+            asm += f"    {s}\n"
 
     saved_registers = []
 
@@ -628,326 +810,172 @@ def convert_function_to_asm(fun_name: str, trips: List[Triple], trip_ctx: Contex
         try:
             lv = t.l_val
             rv = t.r_val
-            if rv is not None and rv.typ == TripleValueType.UNKNOWN:
-                continue
-            trip_ref = TripleValue(TripleValueType.TRIPLE_REF, t)
+            mode = (get_value_loc(lv) if lv else None, get_value_loc(rv) if rv else None)
+            if mode[0] == ValueLoc.UNKNOWN or mode[1] == ValueLoc.UNKNOWN:
+                assert False
+            if t.typ not in SUPPORTED_MODES:
+                assert False, f"Invalid triple type {t.typ}"
+            expected_modes = SUPPORTED_MODES[t.typ]
+            if mode not in expected_modes:
+                print(f"Mode {mode} not expected for type {t.typ}")
+                mode = (get_value_loc(lv) if lv else None, get_value_loc(rv) if rv else None)
+            trip_ref = create_tref_value(t)
             t_reg = trip_ctx.get_allocated_register(trip_ref, t.index)
+            output_val = None
+            output_mode = ValueLoc.UNKNOWN
+            if t_reg is not None:
+                output_mode = ValueLoc.REGISTER
+                output_val = create_register_value(t_reg)
+            elif trip_ref in trip_ctx.spilled_values:
+                output_mode = ValueLoc.ON_STACK
+                output_val = TripleValue(TripleValueType.ON_STACK, trip_ctx.spilled_values[trip_ref] * 8)
+            elif t.flags & TF_BOOL_FORWARDED:
+                output_mode = ValueLoc.IN_CMP_FLAGS
             match t.typ:
                 case TripleType.REGMOVE | TripleType.ASSIGN:
-                    if lv.typ == TripleValueType.REGISTER:
-                        if rv.typ == TripleValueType.CONSTANT and rv.value == 0:
-                            code_stats.basic_ops += 1
-                            write_asm(f"xor {triple_value_str(lv, trip_ctx)}, {triple_value_str(lv, trip_ctx)}")
-                        elif rv.typ == TripleValueType.REGISTER and rv.value == lv.value:
-                            pass
-                        else:
-                            code_stats.mov_ops += 1
-                            write_asm(move_instr(lv.value, rv, trip_ctx))
-                    elif lv.typ == TripleValueType.ON_STACK:
-                        assert rv.typ != TripleValueType.ON_STACK
-                        if rv.typ not in (TripleValueType.REGISTER, TripleValueType.CONSTANT):
-                            assert trip_ctx.memory_spill_register is not None
-                            code_stats.mov_ops += 1
-                            code_stats.mem_loads += 1
-                            if is_triple_value_in_memory(lv):
-                                code_stats.mem_stores += 1
-                            write_asm(move_instr(trip_ctx.memory_spill_register, rv, trip_ctx))
-                            write_asm(f"mov qword {triple_value_str(lv, trip_ctx)}, {reg_str_for_size(trip_ctx.memory_spill_register)}")
-                        else:
-                            code_stats.mov_ops += 1
-                            if is_triple_value_in_memory(lv):
-                                code_stats.mem_stores += 1
-                            write_asm(f"mov qword {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
-                    else:
-                        assert False, f"Unhandled data type {lv.typ.name} in assign LHS"
-                    
+                    write_asm(convert_loc(rv, lv, trip_ctx))
                 case TripleType.BINARY_OP:
-                    should_be_same_inout = t.op not in [Operator.MODULUS, Operator.PLUS] + list(CMP_OP_INSTR_MAP.keys())
-                    switch_lr = False
-                    did_xchg = False
-                    can_handle_mem_lhs = t.op in CMP_OP_INSTR_MAP and t.flags & TF_BOOL_FORWARDED
-                    if t.op != Operator.PLUS:
-                        if (lv.typ in [TripleValueType.CONSTANT] or (lv.typ == TripleValueType.REGISTER and t_reg is not None and should_be_same_inout and lv.value != t_reg)):
-                            if t_reg is not None:
-                                if should_be_same_inout and rv.typ == TripleValueType.REGISTER and rv.value == t_reg:
-                                    if t.op in [Operator.PLUS,Operator.BITWISE_AND, Operator.BITWISE_OR, Operator.BITWISE_XOR]:
-                                        switch_lr = True
-                                    else:
-                                        code_stats.basic_ops += 2
-                                        write_asm(f"xchg {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
-                                        temp = rv
-                                        rv = lv
-                                        lv = temp
-                                        did_xchg = True
-                                else:
-                                    stat_move(lv, code_stats)
-                                    write_asm(move_instr(t_reg, lv, trip_ctx))
-                                    lv = TripleValue(TripleValueType.REGISTER, t_reg)
-                            else:
-                                if t.op in CMP_OP_INSTR_MAP:
-                                    if rv.typ == TripleValueType.REGISTER:
-                                        switch_lr = True
-                                    else:
-                                        assert False
-                                else:
-                                    assert False
-                                    
-                        if lv.typ == TripleValueType.ON_STACK:
-                            # TODO: Binary operators can handle stack values 
-                            if t_reg is not None:
-                                stat_move(lv, code_stats)
-                                write_asm(move_instr(t_reg, lv, trip_ctx))
-                                lv = TripleValue(TripleValueType.REGISTER, t_reg)
-                            else:
-                                stat_move(lv, code_stats)
-                                write_asm(move_instr(trip_ctx.memory_spill_register, lv, trip_ctx))
-                                lv = TripleValue(TripleValueType.REGISTER, trip_ctx.memory_spill_register)
-                        if switch_lr:
-                            assert rv.typ == TripleValueType.REGISTER, "Expected RHS to be in a register"
-                        else:
-                            assert lv.typ == TripleValueType.REGISTER or (can_handle_mem_lhs and lv.typ in [TripleValueType.ON_STACK, TripleValueType.GLOBAL_REF]), "Expected LHS to be in a register"
                     match t.op:
                         case Operator.PLUS:
-                            assert t_reg is not None, "Expected this value to be assigned to a register"
-                            if rv.typ == TripleValueType.CONSTANT and rv.value < 0:
-                                t.op = Operator.MINUS
-                                rv.value = -rv.value
-                            if lv.value != t_reg:
-                                if rv.typ == TripleValueType.REGISTER and rv.value == t_reg:
-                                    switch_lr = True
-                                    stat_binop(lv, code_stats)
-                                    write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(lv, trip_ctx)}")
-                                else:
-                                    if DO_ADDRESS_COMPUTING and lv.typ == TripleValueType.REGISTER and rv.typ in [TripleValueType.CONSTANT, TripleValueType.REGISTER]:
-                                        code_stats.basic_ops += 1
-                                        write_asm(f"lea {reg_str_for_size(t_reg)}, [{reg_str_for_size(lv.value)}{'+' if t.op == Operator.PLUS else '-'}{triple_value_str(rv, trip_ctx)}]")
-                                    else:
-                                        stat_move(lv, code_stats)
-                                        write_asm(move_instr(t_reg, lv, trip_ctx))
-                                        stat_binop(rv, code_stats)
-                                        write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(rv, trip_ctx)}")
+                            assert output_mode in (ValueLoc.REGISTER,)
+                            if triple_values_equal(output_val, rv):
+                                write_asm(f"add {triple_value_str(output_val, trip_ctx)}, {triple_value_str(lv, trip_ctx)}")
                             else:
-                                stat_binop(rv, code_stats)
-                                write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(rv, trip_ctx)}")
-                        case Operator.MINUS | Operator.BITWISE_XOR | Operator.BITWISE_AND | Operator.BITWISE_OR:
-                            assert t_reg is not None, "Expected this value to be assigned to a register"
-                            assert lv.value == t_reg
-                            stat_binop(lv if switch_lr else rv, code_stats)
-                            if switch_lr:
-                                write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(lv, trip_ctx)}")
+                                write_asm(convert_loc(lv, output_val, trip_ctx))
+                                write_asm(f"add {triple_value_str(output_val, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
+                        case Operator.MINUS:
+                            assert output_mode in (ValueLoc.REGISTER,)
+                            if triple_values_equal(output_val, rv):
+                                write_asm(f"neg {triple_value_str(rv, trip_ctx)}")
+                                write_asm(f"add {triple_value_str(rv, trip_ctx)}, {triple_value_str(lv, trip_ctx)}")
                             else:
-                                write_asm(f"{BOP_MAP[t.op]} {reg_str_for_size(t_reg)}, {triple_value_str(rv, trip_ctx)}")
-                            if did_xchg:
-                                if t.op == Operator.MINUS:
-                                    write_asm(f"add {triple_value_str(rv, trip_ctx)}, {reg_str_for_size(t_reg)}")
-                                else:
-                                    assert False, f"XCHG on unknown operator {t.op.name}"
+                                write_asm(convert_loc(lv, output_val, trip_ctx))
+                                write_asm(f"sub {triple_value_str(output_val, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
                         case Operator.GE | Operator.LE | Operator.GT | Operator.LT | Operator.NE | Operator.EQ:
-                            assert t_reg is not None or (t.flags & TF_BOOL_FORWARDED) > 0, "Expected this value to be assigned to a register or forwarded to next operation"
-                            if switch_lr:
-                                t.op = FLIP_CMP_OP[t.op]
-                                temp = lv
+                            assert output_mode in (ValueLoc.IN_CMP_FLAGS, ValueLoc.REGISTER, ValueLoc.AT_LABEL, ValueLoc.ON_STACK)
+                            if mode[0] == ValueLoc.CONSTANT:
+                                tmp = lv
                                 lv = rv
-                                rv = temp
-                            if t_reg is not None:
-                                code_stats.basic_ops += 2
-                                code_stats.mov_ops += 1
+                                rv = tmp
+                                t.op = FLIP_CMP_OP[t.op]
+                            if output_mode == ValueLoc.IN_CMP_FLAGS:
                                 write_asm(f"cmp {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
-                                write_asm(f"mov {reg_str_for_size(t_reg)}, 0")
-                                write_asm(f"set{CMP_OP_INSTR_MAP[t.op]} {reg_str_for_size(t_reg, 8)}")
                             else:
-                                code_stats.basic_ops += 1
+                                assert output_val is not None
                                 write_asm(f"cmp {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
+                                write_asm(f"mov {triple_value_str(output_val, trip_ctx)}, 0") # We must do a move so as not to set cmp flags
+                                write_asm(f"set{CMP_OP_INSTR_MAP[t.op]} {triple_value_str(output_val, trip_ctx, size=8)}")
                         case Operator.SHIFT_LEFT | Operator.SHIFT_RIGHT:
-                            assert rv.typ == TripleValueType.CONSTANT or (rv.typ == TripleValueType.REGISTER and rv.value == RCX_INDEX), "Expected RHS to be constant or RCX"
+                            assert output_mode in (ValueLoc.REGISTER,)
+                            if triple_values_equal(output_val, rv):
+                                assert False
+                            write_asm(convert_loc(lv, output_val, trip_ctx))
+                            assert mode[1] == ValueLoc.CONSTANT or (mode[1] == ValueLoc.REGISTER and rv.value == RCX_INDEX), "Expected shift RHS to be constant or in RCX"
                             op = 'shl' if t.op == Operator.SHIFT_LEFT else 'shr'
                             if t.flags & TF_SIGNED:
                                 op = 'sal' if t.op == Operator.SHIFT_LEFT else 'sar'
-                            stat_binop(rv, code_stats)
-                            write_asm(f"{op} {triple_value_str(lv, trip_ctx)}, {triple_value_str(rv, trip_ctx, size=8)}")
+                            write_asm(f"{op} {triple_value_str(output_val, trip_ctx)}, {triple_value_str(rv, trip_ctx, size=8)}")
+                        case Operator.BITWISE_AND | Operator.BITWISE_OR | Operator.BITWISE_XOR:
+                            assert output_mode in (ValueLoc.REGISTER,)
+                            if triple_values_equal(output_val, rv):
+                                write_asm(f"{BOP_MAP[t.op]} {triple_value_str(output_val, trip_ctx)}, {triple_value_str(lv, trip_ctx)}")
+                            else:
+                                write_asm(convert_loc(lv, output_val, trip_ctx))
+                                write_asm(f"{BOP_MAP[t.op]} {triple_value_str(output_val, trip_ctx)}, {triple_value_str(rv, trip_ctx)}")
                         case Operator.MULTIPLY:
-                            assert t_reg is not None and t_reg == RAX_INDEX and lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected mul to read and write from/to RAX"
-                            assert rv.typ == TripleValueType.REGISTER, "Expected div RHS to be in a register"
-                            code_stats.mul_ops += 1
+                            assert output_mode == ValueLoc.REGISTER, "Expected multiply to output to register"
+                            assert output_val.value == RAX_INDEX, "Multiply must output to RAX"
+                            if triple_values_equal(output_val, rv):
+                                assert False
+                            write_asm(convert_loc(lv, output_val, trip_ctx))
                             write_asm(f"imul {triple_value_str(rv, trip_ctx)}")
                         case Operator.DIVIDE:
-                            assert t_reg is not None and t_reg == RAX_INDEX and lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected div to read and write from/to RAX"
-                            assert rv.typ == TripleValueType.REGISTER, "Expected div RHS to be in a register"
-                            code_stats.div_ops += 1
+                            assert output_mode == ValueLoc.REGISTER, "Expected divide to output to register"
+                            assert output_val.value == RAX_INDEX, "Divide must output to RAX"
+                            if triple_values_equal(output_val, rv):
+                                assert False
+                            write_asm(convert_loc(lv, output_val, trip_ctx))
                             write_asm(f"idiv {triple_value_str(rv, trip_ctx)}")
                         case Operator.MODULUS:
-                            assert t_reg is not None and t_reg == RDX_INDEX, "Expected modulus write to RDX"
-                            assert lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Expected modulus to read from RAX"
-                            assert rv.typ == TripleValueType.REGISTER, "Expected modulus RHS to be in a register"
-                            code_stats.div_ops += 1
+                            assert output_mode == ValueLoc.REGISTER, "Expected modulus to output to register"
+                            assert output_val.value == RDX_INDEX, "Modulus must output to RDX"
+                            assert lv.typ == TripleValueType.REGISTER and lv.value == RAX_INDEX, "Modulus must have RAX input"
+                            if triple_values_equal(output_val, rv):
+                                assert False
                             write_asm(f"idiv {triple_value_str(rv, trip_ctx)}")
                         case _:
-                            assert False, f"Unimplemented operator {t.op.name}"
+                            assert False, f"Unimplmented operator {t.op.name}"
                 case TripleType.UNARY_OP:
-                    if t_reg is not None and ((lv.typ in (TripleValueType.CONSTANT, TripleValueType.ON_STACK)) or (lv.typ == TripleValueType.REGISTER and lv.value != t_reg)):
-                        stat_move(lv, code_stats)
-                        write_asm(move_instr(t_reg, lv, trip_ctx))
-                        lv = TripleValue(TripleValueType.REGISTER, t_reg)
-                    assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
-                    code_stats.basic_ops += 1
-                    match t.op:
-                        case Operator.NEGATE:
-                            assert t_reg is not None, "Expected this value to be assigned to a register"
-                            write_asm(f"neg {reg_str_for_size(t_reg)}")
-                        case Operator.BITWISE_NOT:
-                            assert t_reg is not None, "Expected this value to be assigned to a register"
-                            write_asm(f"not {reg_str_for_size(t_reg)}")
-                        case _:
-                            assert False, f"Unimplemented operator {t.op.name}"
+                    assert t.op in UNOP_MAP, f"Operator {t.op.name} not supported"
+                    op = UNOP_MAP[t.op]
+                    write_asm(convert_loc(lv, output_val, trip_ctx))
+                    write_asm(f"{op} {triple_value_str(output_val, trip_ctx)}")
                 case TripleType.LABEL:
                     write_asm(f"{trip_ctx.ctx_name}_L{t.index}:")
                 case TripleType.GOTO:
-                    assert lv.typ == TripleValueType.TRIPLE_TARGET, "Expected GOTO LHS to be a label"
-                    code_stats.jmp_ops += 1
                     write_asm(f"jmp {triple_value_str(lv, trip_ctx)}")
                 case TripleType.IF_COND:
-                    assert rv.typ == TripleValueType.TRIPLE_TARGET, "IF_COND expected RHS value to be a label"
-                    code_stats.cond_jmp_ops += 1
-                    if lv.typ == TripleValueType.TRIPLE_REF and (lv.value.flags & TF_BOOL_FORWARDED) > 0:
-                        assert lv.value.op in CMP_OP_INSTR_MAP, "Expected Bool forwarded triple to be a CMP op"
-                        op = INVERT_CMP_OP[lv.value.op] if t.op == Operator.NE else lv.value.op
-                        write_asm(f"j{CMP_OP_INSTR_MAP[op]} {triple_value_str(rv, trip_ctx)}")
-                    else:
-                        if lv.typ == TripleValueType.ON_STACK:
-                            write_asm(move_instr(trip_ctx.memory_spill_register, lv, trip_ctx))
-                            lv = create_register_value(trip_ctx.memory_spill_register)
-                        assert lv.typ == TripleValueType.REGISTER, "Expected LHS to be in a register"
-                        code_stats.basic_ops += 1
-                        write_asm(f"cmp {triple_value_str(lv, trip_ctx)}, 0")
-                        if t.op == Operator.NE:
-                            write_asm(f"je {triple_value_str(rv, trip_ctx)}")
-                        elif t.op == Operator.EQ:
-                            write_asm(f"jne {triple_value_str(rv, trip_ctx)}")
-                        else:
-                            assert False, f"Unimplemented IF_COND operator {t.op.name}"
-                case TripleType.STORE:
-                    assert rv.typ in [TripleValueType.REGISTER, TripleValueType.CONSTANT], "Expected STORE RHS to be a constant or register"
-                    mem_word = MEM_WORD_SIZE_MAP[t.size]
-                    if lv.typ in [TripleValueType.REGISTER, TripleValueType.STRING_REF, TripleValueType.BUFFER_REF, TripleValueType.LOCAL_BUFFER_REF, TripleValueType.GLOBAL_LABEL]:
-                        code_stats.mem_stores += 1
-                        code_stats.mov_ops += 1
-                        write_asm(f"mov {mem_word} [{triple_value_str(lv, trip_ctx)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
-                    elif lv.typ in [TripleValueType.ON_STACK, TripleValueType.GLOBAL_REF]:
-                        write_asm(move_instr(trip_ctx.memory_spill_register, lv, trip_ctx))
-                        write_asm(f"mov {mem_word} [{reg_str_for_size(trip_ctx.memory_spill_register)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
-                    elif lv.typ == TripleValueType.ADDRESS_COMPUTE:
-                        lv1 = lv.value[0]
-                        lv2 = lv.value[1]
-                        pos = lv.value[2]
-                        regs = [v for v in (lv1, lv2) if v.typ == TripleValueType.REGISTER]
-                        consts = [v for v in (lv1, lv2) if v.typ == TripleValueType.CONSTANT]
-                        stack_vals = [v for v in (lv1, lv2) if v.typ == TripleValueType.ON_STACK]
-                        global_vals = [v for v in (lv1, lv2) if v.typ == TripleValueType.GLOBAL_REF]
-                        memref_vals = stack_vals + global_vals
-                        
-                        if len(memref_vals) == 2:
+                    match mode:
+                        case (ValueLoc.IN_CMP_FLAGS, _):
+                            op = INVERT_CMP_OP[lv.value.op] if t.op == Operator.NE else lv.value.op
+                            write_asm(f"j{CMP_OP_INSTR_MAP[op]} {triple_value_str(rv, trip_ctx)}")
+                        case (ValueLoc.REGISTER, _):
                             code_stats.basic_ops += 1
-                            code_stats.mov_ops += 2
-                            code_stats.mem_loads += 2
-                            code_stats.mem_stores += 1
-                            write_asm(move_instr(trip_ctx.memory_spill_register, memref_vals[0], trip_ctx))
-                            write_asm(f"add {reg_str_for_size(trip_ctx.memory_spill_register)}, {triple_value_str(memref_vals[1], trip_ctx)}")
-                            write_asm(f"mov {mem_word} [{reg_str_for_size(trip_ctx.memory_spill_register)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
-                        else:
-                            if len(memref_vals) == 1:
-                                code_stats.mov_ops += 1
-                                code_stats.mem_loads += 1
-                                write_asm(move_instr(trip_ctx.memory_spill_register, memref_vals[0], trip_ctx))
-                                memref_vals.pop()
-                                regs.append(create_register_value(trip_ctx.memory_spill_register))
-                            if len(regs) == 2 or (len(regs) == 1 and len(consts) == 1):
-                                la = regs[0]
-                                ra = regs[1] if len(regs) > 1 else consts[0]
-                                code_stats.mem_stores += 1
-                                code_stats.mov_ops += 1
-                                write_asm(f"mov {mem_word} [{triple_value_str(la, trip_ctx)}{'+' if pos == 1 else '-'}{triple_value_str(ra, trip_ctx)}], {triple_value_str(rv, trip_ctx, size=t.size)}")
+                            write_asm(f"cmp {triple_value_str(lv, trip_ctx)}, 0")
+                            if t.op == Operator.NE:
+                                write_asm(f"je {triple_value_str(rv, trip_ctx)}")
+                            elif t.op == Operator.EQ:
+                                write_asm(f"jne {triple_value_str(rv, trip_ctx)}")
                             else:
-                                assert False
+                                assert False, f"Unimplemented IF_COND operator {t.op.name}"
+                        case _:
+                            assert False, f"Unimplemented mode {mode}"
+                case TripleType.STORE:
+                    # TODO: this \/\/
+                    assert rv.typ in [TripleValueType.REGISTER, TripleValueType.CONSTANT], "Expected STORE RHS to be a constant or register"
+                    mem_word = MEM_WORD_SIZE_MAP[t.size]                    
+                    if mode[0] != ValueLoc.ADDRESS_COMPUTE:
+                        address_compute_value, new_asm = prep_address_compute(TripleValue(TripleValueType.ADDRESS_COMPUTE, (lv, create_const_value(0), 1)), trip_ctx)
                     else:
-                        assert False, f"Unhandled value type {lv.typ.name}"
+                        address_compute_value, new_asm = prep_address_compute(lv, trip_ctx)
+                    for a in new_asm:
+                        write_asm(a)
+                    write_asm(f"mov {mem_word} {triple_value_str(address_compute_value, trip_ctx)}, {triple_value_str(rv, trip_ctx, size=t.size)}")
                 case TripleType.LOAD:
-                    storing_to_mem = False
-                    if t_reg is None:
-                        if create_tref_value(t) in trip_ctx.spilled_values:
-                            storing_to_mem = True
-                            t_reg = trip_ctx.memory_spill_register
-                        else:
-                            assert False, "Invalid destination for LOAD"
                     mem_word = MEM_WORD_SIZE_MAP[t.size]
                     instr = "mov" if t.size == 64 or t.size == 32 else ("movsx" if t.flags & TF_SIGNED else "movzx")
                     t_reg_size = 64 if t.size != 32 else 32
-                    if lv.typ in [TripleValueType.REGISTER, TripleValueType.STRING_REF, TripleValueType.BUFFER_REF, TripleValueType.LOCAL_BUFFER_REF]:
-                        code_stats.mov_ops += 1
-                        code_stats.mem_loads += 1
-                        write_asm(f"{instr} {reg_str_for_size(t_reg, t_reg_size)}, {mem_word} [{triple_value_str(lv, trip_ctx)}]")
-                    elif lv.typ == TripleValueType.ADDRESS_COMPUTE:
-                        lv1 = lv.value[0]
-                        lv2 = lv.value[1]
-                        pos = lv.value[2]
-                        regs = [v for v in (lv1, lv2) if v.typ == TripleValueType.REGISTER]
-                        consts = [v for v in (lv1, lv2) if v.typ == TripleValueType.CONSTANT]
-                        stack_vals = [v for v in (lv1, lv2) if v.typ == TripleValueType.ON_STACK]
-                        
-                        if len(stack_vals) == 2:
-                            code_stats.basic_ops += 1
-                            code_stats.mov_ops += 2
-                            code_stats.mem_loads += 3
-                            write_asm(move_instr(trip_ctx.memory_spill_register, stack_vals[0], trip_ctx))
-                            write_asm(f"add {reg_str_for_size(trip_ctx.memory_spill_register)}, {triple_value_str(stack_vals[1], trip_ctx)}")
-                            write_asm(f"{instr} {reg_str_for_size(t_reg, t_reg_size)}, {mem_word} [{reg_str_for_size(trip_ctx.memory_spill_register)}]")
-                        else:
-                            if len(stack_vals) == 1:
-                                code_stats.mem_loads += 1
-                                code_stats.mov_ops += 1
-                                write_asm(move_instr(trip_ctx.memory_spill_register, stack_vals[0], trip_ctx))
-                                stack_vals.pop()
-                                regs.append(create_register_value(trip_ctx.memory_spill_register))
-                            if len(regs) == 2 or (len(regs) == 1 and len(consts) == 1):
-                                la = regs[0]
-                                ra = regs[1] if len(regs) > 1 else consts[0]
-                                code_stats.mem_loads += 1
-                                code_stats.mov_ops += 1
-                                write_asm(f"{instr} {reg_str_for_size(t_reg, t_reg_size)}, {mem_word} [{triple_value_str(la, trip_ctx)}{'+' if pos == 1 else '-'}{triple_value_str(ra, trip_ctx)}]")
-                            else:
-                                assert False
-                    if storing_to_mem:
-                        tv = TripleValue(TripleValueType.ON_STACK, trip_ctx.spilled_values[create_tref_value(t)] * 8)
-                        write_asm(f"mov {triple_value_str(tv, trip_ctx)}, {reg_str_for_size(t_reg)}")
-
+                    if mode[0] != ValueLoc.ADDRESS_COMPUTE:
+                        address_compute_value, new_asm = prep_address_compute(TripleValue(TripleValueType.ADDRESS_COMPUTE, (lv, create_const_value(0), 1)), trip_ctx)
+                    else:
+                        address_compute_value, new_asm = prep_address_compute(lv, trip_ctx)
+                    for a in new_asm:
+                        write_asm(a)
+                    if output_mode == ValueLoc.REGISTER:
+                        write_asm(f"{instr} {triple_value_str(output_val, trip_ctx, size=t_reg_size)}, {mem_word} {triple_value_str(address_compute_value, trip_ctx)}")
+                    elif output_mode == ValueLoc.ON_STACK:
+                        memv = create_register_value(trip_ctx.memory_spill_register)
+                        write_asm(f"{instr} {triple_value_str(memv, trip_ctx, size=t_reg_size)}, {mem_word} {triple_value_str(address_compute_value, trip_ctx)}")
+                        write_asm(convert_loc(memv, output_val, trip_ctx))
+                    else:
+                        assert False, f"Invalid output mode {output_mode}"
                 case TripleType.SYSCALL:
-                    assert t_reg is not None and t_reg == RAX_INDEX, "Expected SYSCALL to be stored in RAX"
+                    assert output_mode == ValueLoc.REGISTER and t_reg == RAX_INDEX, "Expected SYSCALL to be stored in RAX"
                     assert lv is not None and lv.typ == TripleValueType.CONSTANT, "SYSCALL expected a numerical syscall argument"
                     stat_move(lv, code_stats)
-                    write_asm(move_instr(t_reg, lv, trip_ctx))
+                    write_asm(convert_loc(lv, create_register_value(RAX_INDEX), trip_ctx))
                     code_stats.syscalls += 1
                     write_asm("syscall")
-                case TripleType.NOP_USE:
-                    pass
                 case TripleType.NOP_REF:
-                    assert t_reg is not None, "Expected this value to be assigned to a register"
-                    if lv.typ != TripleValueType.REGISTER or lv.value != t_reg:
-                        stat_move(lv, code_stats)
-                        write_asm(move_instr(t_reg, lv, trip_ctx))
-                case TripleType.FUN_ARG_IN:
-                    pass
+                    assert output_mode != ValueLoc.UNKNOWN
+                    write_asm(convert_loc(lv, output_val, trip_ctx))
                 case TripleType.CALL:
                     assert lv is not None and lv.typ == TripleValueType.FUN_LABEL  
                     code_stats.fun_calls += 1                  
                     write_asm(f"call {triple_value_str(lv, trip_ctx)}")
                 case TripleType.RETURN:
-                    l_reg = trip_ctx.get_allocated_register(t.l_val, t.index)
-                    if l_reg is None or l_reg != RAX_INDEX:
-                        if t.l_val.typ == TripleValueType.CONSTANT and t.l_val.value == 0:
-                            code_stats.basic_ops += 1
-                            write_asm(f"xor rax, rax")
-                        else:
-                            stat_move(t.l_val, code_stats)
-                            write_asm(move_instr(RAX_INDEX, t.l_val, trip_ctx))
+                    if mode[0] != ValueLoc.REGISTER or lv.value != RAX_INDEX:
+                        write_asm(convert_loc(lv, create_register_value(RAX_INDEX), trip_ctx))
                 case _:
                     assert False, f"Triple Type {t.typ.name} not implemented"
         except AssertionError as e:
