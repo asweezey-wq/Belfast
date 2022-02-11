@@ -519,7 +519,8 @@ def convert_x86_triples(trips: List[Triple], trip_ctx: Context_x86):
                 if l_reg == r_reg:
                     to_remove.append(t)
         if t.typ == TripleType.NOP_REF:
-            tref_reg = trip_ctx.get_allocated_register(create_tref_value(t), t.index)
+            tref_val = create_tref_value(t)
+            tref_reg = trip_ctx.get_allocated_register(tref_val, t.index)
             if tref_reg is not None:
                 if l_reg != -1 and l_reg == tref_reg:
                     to_remove.append(t)
@@ -527,9 +528,13 @@ def convert_x86_triples(trips: List[Triple], trip_ctx: Context_x86):
                     t.typ = TripleType.REGMOVE
                     t.r_val = t.l_val
                     t.l_val = create_register_value(tref_reg)
-        # trip_reg = trip_ctx.get_allocated_register(TripleValue(TripleValueType.TRIPLE_REF, t), t.index)
-        # trip_str += print_triple(x86_trip) + (f" -> {reg_str_for_size(trip_reg)}" if trip_reg is not None else "") + '\n'
-    
+            elif tref_val in trip_ctx.spilled_values:
+                t.typ = TripleType.ASSIGN
+                t.r_val = t.l_val
+                t.l_val = TripleValue(TripleValueType.ON_STACK, trip_ctx.spilled_values[tref_val] * 8)
+            else:
+                assert False
+
     for t in to_remove:
         trips.remove(t)
     
