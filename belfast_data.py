@@ -737,6 +737,10 @@ class ParseContext:
         self.triple_fun_definitions[name] = trips
 
     def include_parse_context(self, p: 'ParseContext'):
+        if p in self.included_parsectx:
+            return
+        for p2 in p.included_parsectx:
+            self.include_parse_context(p2)
         self.included_parsectx.append(p)
 
     def include_module(self, m: Module):
