@@ -1104,6 +1104,10 @@ if __name__ == '__main__':
     OPTIMIZATION_FLAGS['const-eval'] = belfast_data.COMPILER_SETTINGS.const_propagation
     OPTIMIZATION_FLAGS['value-forwarding'] = belfast_data.COMPILER_SETTINGS.const_propagation
 
+    if not os.path.exists(filename) or os.path.isdir(filename):
+        print(f"ERROR: Invalid filename '{filename}', please provide a valid input file", file=sys.stderr)
+        sys.exit(1)
+
     if args.compile_blc:
         compile_blc(filename)
     else:
