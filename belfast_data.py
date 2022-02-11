@@ -755,9 +755,26 @@ class LinearCombination:
         self.operations : List[Tuple[bool, TripleValue]] = []
         self.coefficient_val : TripleValue = None
         self.negate : bool = False
+        self.last_triple: Optional[Triple] = None
 
     def add_coefficient(self, tv: TripleValue):
-        if self.coefficient_val or len(self.operations):
+        if self.coefficient_val:
+            if tv.typ == TripleValueType.CONSTANT and self.coefficient_val.typ == TripleValueType.CONSTANT:
+                if len(self.operations) == 0 or all([v[1].typ == TripleValueType.CONSTANT for v in self.operations]):
+                    new_l = LinearCombination(self.linear_var)
+                    new_l.coefficient_val = TripleValue(TripleValueType.CONSTANT, tv.value * self.coefficient_val.value)
+                    new_l.negate = self.negate
+                    new_l.operations = [(b,TripleValue(TripleValueType.CONSTANT, v.value * tv.value)) for b,v in self.operations]
+                    return new_l
+            return None
+        elif len(self.operations):
+            if tv.typ == TripleValueType.CONSTANT:
+                if all([v[1].typ == TripleValueType.CONSTANT for v in self.operations]):
+                    new_l = LinearCombination(self.linear_var)
+                    new_l.coefficient_val = tv
+                    new_l.negate = self.negate
+                    new_l.operations = [(b,TripleValue(TripleValueType.CONSTANT, v.value * tv.value)) for b,v in self.operations]
+                    return new_l
             return None 
         new_l = LinearCombination(self.linear_var)
         new_l.coefficient_val = tv
@@ -777,3 +794,28 @@ class LinearCombination:
         new_l.negate = not self.negate
         new_l.operations = [(not i,j) for i,j in self.operations]
         return new_l
+
+    def merge_operations(self):
+        consts = [v for v in self.operations if v[1].typ == TripleValueType.CONSTANT]
+        if len(consts) > 0:
+            sumval = sum([v[1].value * (1 if v[0] else -1) for v in consts])
+            for c in consts:
+                self.operations.remove(c)
+            self.operations.append((Operator.PLUS, TripleValue(TripleValueType.CONSTANT, sumval)))
+
+    def try_merge_linear_combination(self, lc: 'LinearCombination', positive: bool):
+        if not triple_values_equal(lc.linear_var, self.linear_var):
+            return None
+        new_lc = LinearCombination(lc.linear_var)
+        # We can only merge (ax+b) + (cx+d) if a and c are constants 
+        # (a+c)x + b + d
+        if self.coefficient_val is not None and self.coefficient_val.typ != TripleValueType.CONSTANT:
+            return None
+        if lc.coefficient_val is not None and lc.coefficient_val.typ != TripleValueType.CONSTANT:
+            return None
+        
+        sec_negate = lc.negate == positive
+        new_coef = (-1 if self.negate else 1) * (self.coefficient_val.value if self.coefficient_val else 1) + (-1 if sec_negate else 1) * (lc.coefficient_val.value if lc.coefficient_val else 1)
+        new_lc.coefficient_val = TripleValue(TripleValueType.CONSTANT, new_coef)
+        new_lc.operations = self.operations + [(b if positive else not b,v) for b,v in lc.operations]
+        return new_lc

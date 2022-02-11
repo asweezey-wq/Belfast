@@ -19,6 +19,7 @@ OPTIMIZATION_FLAGS_DEFAULTS = {
     'value-simplification': True,
     'code-hoisting': True,
     "code-motion": True,
+    "linear-combinations": True,
 }
 
 OPTIMIZATION_FLAGS = dict(OPTIMIZATION_FLAGS_DEFAULTS)
@@ -934,6 +935,7 @@ def create_dominance_map(blocks: List[TripleBlock]) -> Dict[Triple, Optional[Tri
     return dom_map
 
 def block_local_optimize(b: TripleBlock, opt_ctx: OptimizationContext):
+    linear_combinations: Dict[TripleValue, LinearCombination] = {}
     for i,t in enumerate(b.trips):
         if t.typ == TripleType.ASSIGN:
             # TODO: Global value forwarding
@@ -1002,6 +1004,69 @@ def block_local_optimize(b: TripleBlock, opt_ctx: OptimizationContext):
                 continue
         if OPTIMIZATION_FLAGS["strength-reduce"]:
             strength_reduce(t)
+        if OPTIMIZATION_FLAGS["linear-combinations"]:
+            if t.typ == TripleType.BINARY_OP:
+                if t.l_val.typ == TripleValueType.VAR_REF and t.l_val not in linear_combinations:
+                    linear_combinations[t.l_val] = LinearCombination(create_var_ref_value(t.l_val.value))
+                if t.r_val.typ == TripleValueType.VAR_REF and t.r_val not in linear_combinations:
+                    linear_combinations[t.r_val] = LinearCombination(create_var_ref_value(t.r_val.value))
+                var_vals = [v for v in (t.l_val, t.r_val) if v in linear_combinations]
+                other_vals = [v for v in (t.l_val, t.r_val) if v not in var_vals]
+                if len(var_vals) == 1 and len(other_vals) == 1:
+                    lc = linear_combinations[var_vals[0]]
+                    new_lc = None
+                    if t.op == Operator.PLUS:
+                        new_lc = lc.add_operation(t.op, other_vals[0])
+                    elif t.op == Operator.MINUS:
+                        if other_vals[0] == t.r_val:
+                            new_lc = lc.add_operation(t.op, other_vals[0])
+                        else:
+                            new_lc = lc.do_negate().add_operation(Operator.PLUS, other_vals[0])
+                    if new_lc:
+                        new_lc.last_triple = t
+                        linear_combinations[create_tref_value(t)] = new_lc
+                elif len(var_vals) == 2:
+                    if t.op in (Operator.PLUS, Operator.MINUS):
+                        if triple_values_equal(linear_combinations[var_vals[0]].linear_var, linear_combinations[var_vals[1]].linear_var):
+                            new_lc = linear_combinations[var_vals[0]].try_merge_linear_combination(linear_combinations[var_vals[1]], positive=t.op == Operator.PLUS)
+                            if new_lc:
+                                new_lc.last_triple = t
+                                linear_combinations[create_tref_value(t)] = new_lc
+
+    if OPTIMIZATION_FLAGS["linear-combinations"]:
+        for v,lc in linear_combinations.items():
+            if v.typ == TripleValueType.TRIPLE_REF:
+                trip = v.value
+                if len(lc.operations) > 1:
+                    olen = len(lc.operations)
+                    lc.merge_operations()
+                    if len(lc.operations) < olen:
+                        # If we merged
+                        trefs = opt_ctx.triple_references[trip]
+                        if not all([create_tref_value(t) in linear_combinations for t in trefs]):
+                            # If this triple isn't solely a part of other linear combinations
+                            # Materialize this LC
+                            materialize_trips = []
+                            v = lc.linear_var
+                            if lc.coefficient_val:
+                                materialize_trips.append(Triple(TripleType.BINARY_OP, Operator.MULTIPLY, v, lc.coefficient_val, flags=TF_SIGNED, uid=triple_uid()))
+                                v = create_tref_value(materialize_trips[-1])
+                            if lc.negate and (len(lc.operations) == 0 or not lc.operations[0][0]):
+                                materialize_trips.append(Triple(TripleType.UNARY_OP, Operator.NEGATE, v, None, uid=triple_uid()))
+                                v = create_tref_value(materialize_trips[-1])
+                            else:
+                                do_negate = lc.negate
+                                for pos,v1 in lc.operations:
+                                    if do_negate:
+                                        materialize_trips.append(Triple(TripleType.BINARY_OP, Operator.MINUS, v1, v, flags=TF_SIGNED, uid=triple_uid()))
+                                        do_negate = False
+                                    else:
+                                        materialize_trips.append(Triple(TripleType.BINARY_OP, Operator.PLUS if pos else Operator.MINUS, v, v1, flags=TF_SIGNED, uid=triple_uid()))
+                                    v = create_tref_value(materialize_trips[-1])
+                            ind = opt_ctx.trips.index(trip)
+                            for t in reversed(materialize_trips):
+                                opt_ctx.insert_triple(ind, t, "Materialize Linear Operation")
+                            opt_ctx.retarget_triple_references(trip, v, "Combined Linear Operation")
 
     if OPTIMIZATION_FLAGS["code-motion"]:
         code_motion(b, opt_ctx)
