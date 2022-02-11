@@ -937,24 +937,26 @@ def block_local_optimize(b: TripleBlock, opt_ctx: OptimizationContext):
     for i,t in enumerate(b.trips):
         if t.typ == TripleType.ASSIGN:
             # TODO: Global value forwarding
+            var = create_var_ref_value(t.l_val.value)
+            var_uses = [rt for rt in b.trips[i:] if triple_references_var(rt, var.value)]
             if OPTIMIZATION_FLAGS["unused-code"]:
-                var = create_var_ref_value(t.l_val.value)
-                var_uses = [rt for rt in b.trips[i:] if triple_references_var(rt, var.value)]
                 var_used = var in b.out_vals or len(var_uses) > 0
                 if not var_used or (var in b.vals_assigned and b.trips.index(b.vals_assigned[var]) > i):
                     opt_ctx.remove_triple(t, "Assignment Without Use")
                     continue
             if OPTIMIZATION_FLAGS["value-forwarding"]:
-                if t.r_val.typ in [TripleValueType.CONSTANT, TripleValueType.VAR_REF]:
+                if t.r_val.typ in [TripleValueType.CONSTANT, TripleValueType.VAR_REF, TripleValueType.TRIPLE_REF]:
                     # No point in forwarding triples, that just causes problems
                     next_assign = opt_ctx.find_assign_between(t, b.trips[-1], var.value)
                     last_ind = b.trips.index(next_assign) if next_assign else len(b.trips)
                     removed_all_uses = True
+                    if t.r_val.typ == TripleValueType.TRIPLE_REF and var in b.out_vals:
+                        continue
                     for rt in var_uses:
                         rt_ind = b.trips.index(rt)
                         if i < rt_ind < last_ind:
                             has_value_changed = True
-                            if t.r_val.typ == TripleValueType.CONSTANT:
+                            if t.r_val.typ == TripleValueType.CONSTANT or t.r_val.typ == TripleValueType.TRIPLE_REF:
                                 has_value_changed = False
                             elif t.r_val.typ == TripleValueType.VAR_REF:
                                 has_value_changed = opt_ctx.find_assign_between(t, rt, t.r_val.value) is not None
