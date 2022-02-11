@@ -75,8 +75,8 @@ fun strlen s do
 end
 
 fun memset val ptr len do
-    var i = 0
-    while i < len do
+    var end_ptr = ptr + len
+    while ptr < end_ptr do
         store8(ptr, val)
         ptr = ptr + 1
     end
